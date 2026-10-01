@@ -175,6 +175,18 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
     SDL_CondSignal(inst->audioSyncCond);
     SDL_UnlockMutex(inst->audioSyncLock);
 
+    // RealtimeBGM: the host BGM renderer is paced by the audio device, so it renders exactly `len` frames
+    // per callback; it keeps running while muted so it stays in time with the game
+    Sound::BgmRenderer& bgm = inst->nds->SndTracker.Renderer();
+    bool bgmActive = (num_in >= 1) && bgm.Active();
+    thread_local std::vector<s16> bgmbuf;
+    if (bgmActive)
+    {
+        bgmbuf.resize(len * 2);
+        bgm.SetOutputRate(inst->audioFreq);
+        bgm.Render(bgmbuf.data(), len);
+    }
+
     if ((num_in < 1) || inst->audioMutedByWindowFocus || inst->audioMutedToggle || inst->audioMutedByFastForward)
     {
         memset(stream, 0, len*sizeof(s16)*2);
@@ -194,6 +206,16 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
 
         for (int i = num_in; i < len_in; i++)
             ((u32*)stream)[i] = ((u32*)stream)[last];
+    }
+
+    if (bgmActive)
+    {
+        s16* samples = (s16*) stream;
+        for (int i = 0; i < len * 2; i++)
+        {
+            s32 val = samples[i] + (((s32) bgmbuf[i] * inst->audioVolume) >> 8);
+            samples[i] = (s16) std::clamp(val, -0x8000, 0x7FFF);
+        }
     }
 }
 
@@ -506,6 +528,13 @@ void EmuInstance::audioUpdateSettings()
 
     setupMicInputData();
     if (micStarted) micOpen();
+}
+
+void EmuInstance::updateRealtimeBgmSettings()
+{
+    if (nds == nullptr) return;
+
+    nds->SndTracker.Settings.Enabled = globalCfg.GetBool("Audio.RealtimeBGM");
 }
 
 void EmuInstance::audioEnable()

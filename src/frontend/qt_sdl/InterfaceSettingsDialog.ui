@@ -97,6 +97,13 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QCheckBox" name="cbRealtimeBgm">
+        <property name="text">
+         <string>Keep background music at normal speed during fast-forward</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>

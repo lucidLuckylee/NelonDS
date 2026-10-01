@@ -1997,6 +1997,7 @@ void MainWindow::onUpdateInterfaceSettings()
     emuInstance->slowmoFPS = globalCfg.GetDouble("SlowmoFPS");
     panel->setMouseHide(globalCfg.GetBool("Mouse.Hide"),
                         globalCfg.GetInt("Mouse.HideSeconds")*1000);
+    emuInstance->updateRealtimeBgmSettings();
 }
 
 void MainWindow::onInterfaceSettingsFinished(int res)

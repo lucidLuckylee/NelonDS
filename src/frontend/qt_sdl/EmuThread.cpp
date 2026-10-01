@@ -356,6 +356,7 @@ void EmuThread::run()
 
             fastforward = enablefastforward;
             slowmo = enableslowmo;
+            if (emuInstance->nds) emuInstance->nds->SndTracker.SetFastForward(fastforward);
             emuInstance->updateFastForwardMute(fastforward);
 
             if (slowmo) emuInstance->curFPS = emuInstance->slowmoFPS;
