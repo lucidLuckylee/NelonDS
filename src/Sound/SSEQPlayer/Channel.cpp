@@ -106,18 +106,17 @@ void Channel::UpdatePorta(const Track &trk)
 	this->manualSweep = false;
 	this->sweepPitch = trk.sweepPitch;
 	this->sweepCnt = 0;
-	if (!trk.state[TS_PORTABIT])
+	// NitroSDK NoteOnCommandProc applies the track's sweep pitch with or without portamento
+	if (trk.state[TS_PORTABIT])
 	{
-		this->sweepLen = 0;
-		return;
+		int diff = (static_cast<int>(trk.portaKey) - static_cast<int>(this->key)) << 22;
+		this->sweepPitch += diff >> 16;
 	}
-
-	int diff = (static_cast<int>(trk.portaKey) - static_cast<int>(this->key)) << 22;
-	this->sweepPitch += diff >> 16;
 
 	if (!trk.portaTime)
 	{
-		this->sweepLen = this->noteLength;
+		// the SDK passes length -1 for notes without a length, and a sweep that long never runs
+		this->sweepLen = this->noteLength > 0 ? this->noteLength : 0;
 		this->manualSweep = true;
 	}
 	else
@@ -449,17 +448,11 @@ void Channel::Update()
 			this->state = CS_ATTACK;
 			// Fall down
 		case CS_ATTACK:
-		{
-			int newAmpl = this->ampl;
-			int oldAmpl = this->ampl >> 7;
-			do
-				newAmpl = (newAmpl * static_cast<int>(this->attackLvl)) / 256;
-			while ((newAmpl >> 7) == oldAmpl);
-			this->ampl = newAmpl;
+			// one multiply per update, like NitroSDK SND_UpdateExChannelEnvelope
+			this->ampl = (this->ampl * static_cast<int>(this->attackLvl)) / 256;
 			if (!this->ampl)
 				this->state = CS_DECAY;
 			break;
-		}
 		case CS_DECAY:
 		{
 			this->ampl -= static_cast<int>(this->decayRate);
@@ -473,11 +466,6 @@ void Channel::Update()
 		}
 		case CS_RELEASE:
 			this->ampl -= static_cast<int>(this->releaseRate);
-			if (this->ampl <= AMPL_THRESHOLD)
-			{
-				this->Kill();
-				return;
-			}
 	}
 
 	if (bModulation && this->modDelayCnt < this->modDelay)
@@ -515,6 +503,20 @@ void Channel::Update()
 		this->modCounter = counter;
 	}
 
+	// NitroSDK SND_ExChannelMain stops a releasing channel once the total attenuation
+	// (velocity + envelope + volumes + faders + volume LFO) reaches -72.3 dB, not the envelope alone
+	if (this->state == CS_RELEASE)
+	{
+		int decay = (this->ampl >> 7) + this->velocity + this->extAmpl;
+		if (bModulation && this->modType == 1 && decay > -32768)
+			decay += modParam;
+		if (decay <= AMPL_MIN)
+		{
+			this->Kill();
+			return;
+		}
+	}
+
 	if (bTmrNeedUpdate)
 	{
 		int totalAdj = this->extTune;
@@ -532,6 +534,9 @@ void Channel::Update()
 
 		if (totalAdj)
 			tmr = Timer_Adjust(tmr, totalAdj);
+		// NitroSDK SND_ExChannelMain: PSG tone timers are rounded down to a multiple of 4
+		if ((this->tempReg.CR & SOUND_FORMAT_PSG) == SOUND_FORMAT_PSG && this->chnId < 14)
+			tmr &= 0xFFFC;
 		this->reg.timer = -tmr;
 		this->reg.sampleIncrease = (ARM7_CLOCK / (this->ply->sampleRate * 2)) / (0x10000 - this->reg.timer);
 		this->flags.reset(CF_UPDTMR);

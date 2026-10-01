@@ -58,6 +58,10 @@ constexpr u32 WORK_SIZES[2] = {WORK_TRACK_OFS + 32 * TRACK_SIZE + 8 * 72, WORK_T
 constexpr u32 EXCH_CALLBACK_DATA_OFS = 76;
 constexpr u32 PLAYER_TRACKS_OFS = 8;
 
+// Games fade by sending one PLAYER_PARAM extFader per frame; a change after a longer gap is not
+// part of a fade and takes one frame.
+constexpr u32 MAX_FADER_GAP = 4;
+
 constexpr u32 MAX_MML = 0x100000;
 constexpr u32 MAX_BLOB = 0x400000;
 
@@ -76,7 +80,7 @@ SndCmdTracker::~SndCmdTracker() = default;
 
 void SndCmdTracker::Reset()
 {
-    Bgm.Stop();
+    Bgm.Kill();
     P = {};
     HostP = -1;
     CurMuteMask = 0;
@@ -239,8 +243,12 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
             s32 val = a3 == 1 ? (s32)(s8)a2 : a3 == 2 ? (s32)(s16)a2 : (s32)a2;
             if (a1 == 6)
             {
+                // the host replays fader changes at their 1x pace, which keeps fades at their 1x
+                // length while fast-forwarding
+                u32 gap = FrameCount - P[a0].FaderFrame;
                 P[a0].ExtFader = (s16)val;
-                if ((int)a0 == HostP) Bgm.SetExtFader((s16)val);
+                P[a0].FaderFrame = FrameCount;
+                if ((int)a0 == HostP) Bgm.SetExtFader((s16)val, gap >= 1 && gap <= MAX_FADER_GAP ? gap : 1);
             }
             else if (a1 == 0x1A)
             {
@@ -271,7 +279,11 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
         break;
 
     case CMD_ALLOCATABLE_CHANNEL:
-        if (a0 < 16) P[a0].ChanMask |= (u16)a2;
+        if (a0 < 16)
+        {
+            P[a0].ChanMask |= (u16)a2;
+            if ((int)a0 == HostP) Bgm.SetChannelMask(P[a0].ChanMask);
+        }
         break;
 
     case CMD_PLAYER_LOCAL_VAR:
@@ -414,6 +426,9 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
 
     if (HostP >= 0) LeaveHostMode();
 
+    // the driver keeps the player's notes on its allocatable channels (all of them until ALLOCATABLE_CHANNEL)
+    Bgm.SetChannelMask(s.ChanMask ? s.ChanMask : 0xFFFF);
+    ApplyOutputSettings();
     if (!ok || !Bgm.Load(mml.data(), s.MMLLen, sbnk.data(), (u32)sbnk.size(), swarPtr, swarLen))
     {
         Log(LogLevel::Warn, "RealtimeBGM: could not load player %d (%s) into the host renderer\n", player,
@@ -568,11 +583,27 @@ bool SndCmdTracker::ParseDriverInfo()
     return true;
 }
 
+void SndCmdTracker::ApplyOutputSettings()
+{
+    if (Settings.Interpolation != AppliedInterp)
+    {
+        AppliedInterp = Settings.Interpolation;
+        Bgm.SetInterpolation(AppliedInterp);
+    }
+    if (Settings.OutputSkew != AppliedSkew)
+    {
+        AppliedSkew = Settings.OutputSkew;
+        Bgm.SetOutputSkew(AppliedSkew);
+    }
+}
+
 void SndCmdTracker::OnFrame()
 {
+    FrameCount++;
+    ApplyOutputSettings();
     if (HostP >= 0 && !Settings.Enabled)
         LeaveHostMode();
-    if (HostP >= 0 && !Bgm.Active() && !P[HostP].Paused)
+    if (HostP >= 0 && !Bgm.Playing() && !P[HostP].Paused)
     {
         // the host copy reached the end of a non-looping sequence
         NoHost[HostP] = true;
@@ -614,7 +645,7 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
         }
         if (!found)
         {
-            Bgm.Stop();
+            Bgm.Kill();
             u32 sw = SharedWork, dia = DriverInfoAddr, dir = DriverInfoReq;
             Reset();
             // same game: the driver's work areas do not move
@@ -652,7 +683,7 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
 
     if (file->Saving) return;
 
-    Bgm.Stop();
+    Bgm.Kill();
     HostP = -1;
     NoHost = {};
     ChanOwner.fill(-1);

@@ -8,7 +8,8 @@
  * https://github.com/fincs/FSS
  *
  * NelonDS changes: namespaced, writes s16 stereo directly, NitroSDK extFader /
- * per-track ext volume/pitch/pan/mute, tick counter, tick-limited/silent run for seeking.
+ * per-track ext volume/pitch/pan/mute, tick counter, tick-limited/silent run for seeking,
+ * allocatable channel mask.
  */
 
 #pragma once
@@ -37,6 +38,7 @@ struct Player
 	int8_t trackExtPan[FSS_TRACKCOUNT];
 	uint16_t trackMute;
 	int outputVol; // SOUNDCNT master volume, 0..128
+	uint16_t channelMask; // channels notes may be allocated on (NitroSDK track channel_mask, set by ALLOCATABLE_CHANNEL)
 
 	uint32_t tickCounter; // SNDSharedWork tickCounter equivalent
 	bool seqEnded;

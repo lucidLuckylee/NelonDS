@@ -48,13 +48,23 @@ public:
     // Start playback. If atTick > 0, the sequencer is first advanced silently to that
     // tick (SNDSharedWork tickCounter units: 48 ticks per quarter note) so the host
     // copy lines up with the driver copy that was already playing.
+    // A start at atTick > 0 fades in over a few ms, since notes are already sounding there.
     void Start(u32 atTick);
-    void Stop();                 // immediate silence, unload nothing
-    void Pause(bool paused);
-    bool Active() const;         // playing (not stopped, not finished)
+    // Hands the playing song to the outgoing voice, which keeps rendering on top of whatever starts
+    // next (crossfade): it plays out its queued fader steps at their 1x pace, then, unless that left
+    // it silent, fades out over fadeMs of wall-clock time. Only one outgoing voice is kept.
+    void Release(u32 fadeMs);
+    void Stop();                 // Release() with the default fade, unload nothing
+    void Kill();                 // immediate silence of both voices (reset, savestate load)
+    void Pause(bool paused);     // pauses both voices
+    bool Active() const;         // has output: Playing() or the outgoing voice still sounding
+    bool Playing() const;        // current song playing (not stopped, not finished)
 
     // Driver-level controls, mirrored from sniffed SND commands.
-    void SetExtFader(s16 driverDecibel);        // SNDPlayer.extFader (PLAYER_PARAM offset 6), 0 = full
+    // SNDPlayer.extFader (PLAYER_PARAM offset 6), 0 = full. frames: emulated frames since the previous
+    // value; the host glides there over that many frames of wall-clock time at 1x, so fades keep their
+    // 1x shape while fast-forwarding. 0 applies it immediately.
+    void SetExtFader(s16 driverDecibel, u32 frames = 0);
     void SetTempoRatio(u16 ratio256);           // SNDPlayer.tempo_ratio, 256 = 1.0
     void SetTrackFader(u16 trackMask, s16 driverDecibel);  // TRACK_PARAM offset 0xA
     void SetTrackPitch(u16 trackMask, s16 pitch);          // TRACK_PARAM offset 0xC
@@ -62,9 +72,17 @@ public:
     void MuteTracks(u16 trackMask, bool mute);  // MUTE_TRACK
     void SetVariable(u8 index, s16 value);      // PLAYER_LOCAL_VAR
     void SetMasterVolume(u8 vol127);            // MASTER_VOLUME
+    // Channels the song's notes may use (the player's ALLOCATABLE_CHANNEL mask), 0xFFFF = all.
+    // Applies to new notes; kept across Load().
+    void SetChannelMask(u16 mask);
 
     // Output configuration. Called before Render() from the audio thread as needed.
     void SetOutputRate(double hz);
+    // Speed of the emulated audio relative to the DS (TargetFPS / 59.8261 at 1x): the host plays
+    // that much faster and higher too, so it lines up with the hardware path. 1.0 = true DS speed.
+    void SetOutputSkew(double skew);
+    // Sample interpolation, melonDS AudioInterpolation values (0 = none, like the DS).
+    void SetInterpolation(int mode);
 
     // Writes `frames` interleaved stereo s16 frames at the output rate (does not mix).
     // Writes silence when inactive. Never blocks on the emu thread for long.

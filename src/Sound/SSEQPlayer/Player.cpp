@@ -15,7 +15,7 @@ namespace melonDS::Sound::SSEQPlayer
 {
 
 
-Player::Player() : prio(0), nTracks(0), tempo(0), tempoCount(0), tempoRate(0), masterVol(0), extFader(0), trackMute(0), outputVol(128),
+Player::Player() : prio(0), nTracks(0), tempo(0), tempoCount(0), tempoRate(0), masterVol(0), extFader(0), trackMute(0), outputVol(128), channelMask(0xFFFF),
 	tickCounter(0), seqEnded(false), paused(false), skipNotes(false), sseq(nullptr), sampleRate(32768), interpolation(INTERPOLATION_NONE),
 	secondsPerSample(1.0 / 32768), secondsIntoPlayback(0), secondsUntilNextClock(SecondsPerClockCycle)
 {
@@ -100,6 +100,7 @@ void Player::Stop(bool bKillSound)
 }
 
 // Original FSS Function: Chn_Alloc
+// Like NitroSDK SND_AllocExChannel, only channels in channelMask are considered.
 int Player::ChannelAlloc(int type, int priority)
 {
 	static const uint8_t pcmChnArray[] = { 4, 5, 6, 7, 2, 0, 3, 1, 8, 9, 10, 11, 14, 12, 15, 13 };
@@ -115,6 +116,8 @@ int Player::ChannelAlloc(int type, int priority)
 	for (int i = 0; i < arraySize; ++i)
 	{
 		int thisChnNo = chnArray[i];
+		if (!(this->channelMask & (1 << thisChnNo)))
+			continue;
 		Channel &thisChn = this->channels[thisChnNo];
 		if (curChnNo != -1 && thisChn.prio >= this->channels[curChnNo].prio)
 		{
@@ -308,8 +311,10 @@ void Player::GenerateSamples(int16_t *buf, unsigned samples)
 					datashift = 4;
 				sample = muldiv7(sample, chn.reg.volumeMul) >> datashift;
 
-				leftChannel += muldiv7(sample, 127 - chn.reg.panning);
-				rightChannel += muldiv7(sample, chn.reg.panning);
+				// pan law of the SPU (melonDS SPUChannel::PanOutput): 127 counts as 128
+				int32_t pan = chn.reg.panning == 127 ? 128 : chn.reg.panning;
+				leftChannel += (sample * (128 - pan)) >> 7;
+				rightChannel += (sample * pan) >> 7;
 			}
 		}
 

@@ -40,6 +40,8 @@ struct RealtimeBgmSettings
     bool Enabled = true;
     bool JinglesAt1x = false;   // fanfares are short and game-timed: keep them on the emulated clock
     bool AmbientAt1x = false;   // environmental loops stay on emulation clock
+    int Interpolation = 0;      // melonDS AudioInterpolation value, see BgmRenderer::SetInterpolation
+    double OutputSkew = 1.0;    // see BgmRenderer::SetOutputSkew
 };
 
 class SndCmdTracker
@@ -80,6 +82,7 @@ private:
         u32 CRC = 0;
         u16 ChanMask = 0;         // last ALLOCATABLE_CHANNEL
         s16 ExtFader = 0;
+        u32 FaderFrame = 0;       // FrameCount at the last ExtFader change
         u16 TempoRatio = 256;
         SeqClass Cls = SeqClass::Unknown;
         const SeqInfo* Info = nullptr;   // nullptr if not found in index
@@ -94,6 +97,7 @@ private:
     void PickHost();              // fast-forwarding without a host: adopt the most recent eligible player
     bool Eligible(const PlayerState& s) const;
     void UpdateMuteMask();
+    void ApplyOutputSettings();   // passes changed Settings.Interpolation/OutputSkew to the renderer
     bool ParseDriverInfo();       // returns true if a valid snapshot was parsed
     u32 TickCounter(int player) const;  // from SNDSharedWork, 0 if unknown
     u32 RamRead32(u32 addr) const;
@@ -118,7 +122,10 @@ private:
     std::array<u32, 16> StartOrder {};  // per player: StartCounter value at its last start
     std::array<bool, 16> NoHost {};     // per player: host mode failed or finished for this start
     u32 StartCounter = 0;
+    u32 FrameCount = 0;           // emulated frames, for the 1x pace of fader changes
     u8 MasterVol = 127;
+    int AppliedInterp = -1;       // last values passed by ApplyOutputSettings
+    double AppliedSkew = 0;
 };
 
 }

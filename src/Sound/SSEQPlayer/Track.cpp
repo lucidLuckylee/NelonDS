@@ -170,7 +170,7 @@ int Track::NoteOn(int key, int vel, int len)
 			chn = &this->ply->channels[nCh];
 			chn->tempReg.CR = SOUND_FORMAT_PSG | SCHANNEL_ENABLE | SOUND_DUTY(noteDef->swav & 0x7);
 		}
-		chn->tempReg.TIMER = -SOUND_FREQ(262 * 8); // key #60 (C4)
+		chn->tempReg.TIMER = 8006; // key #60 (C4), NitroSDK PSG_TIMER_C4 = SND_TIMER_CLOCK / (8 * 261.6255653)
 		chn->reg.samplePosition = -1;
 		chn->reg.psgX = 0x7FFF;
 		chn->reg.psgLastCount = 0;
@@ -532,7 +532,12 @@ void Track::Run()
 			if (this->ply->skipNotes || (this->ply->trackMute & (1 << (this->num & 15))))
 				;
 			else if (this->state[TS_TIEBIT])
-				this->NoteOnTie(key, vel);
+			{
+				// NitroSDK NoteOnCommandProc: without porta time the sweep runs over the note's length, tied or not
+				int nCh = this->NoteOnTie(key, vel);
+				if (nCh >= 0 && !this->portaTime)
+					this->ply->channels[nCh].sweepLen = len > 0 ? len : 0;
+			}
 			else
 				this->NoteOn(key, vel, len);
 		}
