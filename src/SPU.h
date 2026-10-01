@@ -19,8 +19,10 @@
 #ifndef SPU_H
 #define SPU_H
 
+#include <vector>
 #include "Savestate.h"
 #include "Platform.h"
+#include "Sound/TimeStretch.h"
 
 struct blip_t;
 
@@ -253,6 +255,12 @@ public:
     int GetOutputSize() const;
     void Sync(bool wait);
     int ReadOutput(s16* data, int samples);
+
+    // like ReadOutput, but if speedRatio is meaningfully different from 1.0, pulls
+    // up to ceil(outFrames*speedRatio) frames and time-stretches them down to
+    // outFrames so sound effects keep their pitch during fast-forward/slow-mo.
+    int ReadOutputStretched(s16* data, int outFrames, double speedRatio);
+
     void SetOutputSampleRate(double rate);
     void SetOutputSkew(double skew);
 
@@ -264,10 +272,15 @@ public:
     void Write32(u32 addr, u32 val);
 
 private:
+    void GrowOutputBuffer(u32 minFrames);
+
     u32 OutputBufferSize = 0;
     double OutputSampleRate;
     double OutputSkew = 1.0;
     melonDS::NDS& NDS;
+
+    Sound::TimeStretch Stretcher;
+    std::vector<s16> StretchScratch;
 
     blip_t* BlipLeft;
     blip_t* BlipRight;

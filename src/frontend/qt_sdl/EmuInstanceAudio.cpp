@@ -167,11 +167,24 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
     double skew = std::max(inst->targetFPS / INTERNAL_FRAME_RATE, 0.5);
     inst->nds->SPU.SetOutputSkew(skew);
 
-    int len_in = inst->audioGetNumSamplesOut(len);
-    if (len_in > inst->audioBufSize) len_in = inst->audioBufSize;
+    // while fast-forwarding, time-stretch the SPU output (sound effects/cries; BGM is
+    // handled separately below) so it plays faster at its original pitch instead of
+    // being chopped by the ring buffer overwriting itself
+    bool stretch = (inst->curFPS > inst->targetFPS) && inst->globalCfg.GetBool("Audio.FastForwardStretch");
 
+    int len_in, num_in;
     SDL_LockMutex(inst->audioSyncLock);
-    int num_in = inst->nds->SPU.ReadOutput((s16*) stream, len_in);
+    if (stretch)
+    {
+        len_in = len;
+        num_in = inst->nds->SPU.ReadOutputStretched((s16*) stream, len, inst->curFPS / inst->targetFPS);
+    }
+    else
+    {
+        len_in = inst->audioGetNumSamplesOut(len);
+        if (len_in > inst->audioBufSize) len_in = inst->audioBufSize;
+        num_in = inst->nds->SPU.ReadOutput((s16*) stream, len_in);
+    }
     SDL_CondSignal(inst->audioSyncCond);
     SDL_UnlockMutex(inst->audioSyncLock);
 
@@ -535,6 +548,9 @@ void EmuInstance::updateRealtimeBgmSettings()
     if (nds == nullptr) return;
 
     nds->SndTracker.Settings.Enabled = globalCfg.GetBool("Audio.RealtimeBGM");
+    // the host renderer follows the hardware path's interpolation and speed skew so a handover is seamless
+    nds->SndTracker.Settings.Interpolation = globalCfg.GetInt("Audio.Interpolation");
+    nds->SndTracker.Settings.OutputSkew = std::max(targetFPS / INTERNAL_FRAME_RATE, 0.5);
 }
 
 void EmuInstance::audioEnable()

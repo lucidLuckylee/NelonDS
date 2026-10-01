@@ -57,6 +57,8 @@ add_library(core STATIC
     Sound/SdatIndex.cpp
     Sound/BgmRenderer.cpp
     Sound/SndCmdTracker.cpp
+    Sound/TimeStretch.h
+    Sound/TimeStretch.cpp
     types.h
     Utils.cpp
     Utils.h
