@@ -860,6 +860,8 @@ void SPU::Mix(u32 spucycles)
 {
     s32 left = 0, right = 0;
     s32 leftoutput = 0, rightoutput = 0;
+    // RealtimeBGM: channels playing BGM that the host renderer replaces; they keep running but are silent
+    u16 mutemask = NDS.SndTracker.MuteMask();
 
     if (Cnt & (1<<15))
     {
@@ -867,6 +869,10 @@ void SPU::Mix(u32 spucycles)
         s32 ch1 = Channels[1].DoRun(spucycles);
         s32 ch2 = Channels[2].DoRun(spucycles);
         s32 ch3 = Channels[3].DoRun(spucycles);
+        if (mutemask & (1<<0)) ch0 = 0;
+        if (mutemask & (1<<1)) ch1 = 0;
+        if (mutemask & (1<<2)) ch2 = 0;
+        if (mutemask & (1<<3)) ch3 = 0;
 
         // TODO: addition from capture registers
         Channels[0].PanOutput(ch0, left, right);
@@ -880,7 +886,8 @@ void SPU::Mix(u32 spucycles)
             SPUChannel* chan = &Channels[i];
 
             s32 channel = chan->DoRun(spucycles);
-            chan->PanOutput(channel, left, right);
+            if (!(mutemask & (1<<i)))
+                chan->PanOutput(channel, left, right);
         }
 
         // sound capture
