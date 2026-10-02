@@ -196,6 +196,12 @@ namespace MelonDSAndroid
             instance->updateMotionData(ax, ay, az, rx, ry, rz);
     }
 
+    void setFastForward(bool enabled)
+    {
+        if (instance)
+            instance->setFastForward(enabled);
+    }
+
     void start()
     {
         startAudio();

@@ -1,8 +1,11 @@
+#include <algorithm>
+#include <string.h>
 #include <ctime>
 #include <chrono>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <filesystem>
+#include <vector>
 #include <GLES3/gl3.h>
 #include "Args.h"
 #include "GPU3D_Compute.h"
@@ -54,6 +57,10 @@ MelonInstance::MelonInstance(int instanceId, std::shared_ptr<EmulatorConfigurati
     {
         nds = new NDS(std::move(*args), this);
     }
+
+    nds->SndTracker.Settings.Enabled = configuration->audioSettings.nelonBgmEnabled;
+    nds->SndTracker.Settings.Interpolation = configuration->audioSettings.audioInterpolation;
+    nds->SndTracker.Settings.OutputSkew = 60.0 / 59.8260982880808;
 
     if (configuration->userInternalFirmwareAndBios)
     {
@@ -474,14 +481,50 @@ void MelonInstance::releaseKey(u32 key)
     }
 }
 
-int MelonInstance::readAudioOutput(s16* buffer, int length)
+int MelonInstance::readAudioOutput(s16* buffer, int length, double outputRate, double speedRatio, int volume)
 {
-    return nds->SPU.ReadOutput(buffer, length);
+    int num_in = nds->SPU.ReadOutputStretched(buffer, length, speedRatio);
+
+    // NelonDS: the host BGM renderer is paced by the audio device, so it renders exactly `length` frames
+    // per callback; it keeps running while muted so it stays in time with the game
+    melonDS::Sound::BgmRenderer& bgm = nds->SndTracker.Renderer();
+    if (!bgm.Active())
+    {
+        if (volume < 256)
+            for (int i = 0; i < num_in * 2; i++)
+                buffer[i] = ((s32) buffer[i] * volume) >> 8;
+        return num_in;
+    }
+
+    // keep the host sequencer running even when the hardware path underruns, so the music never stalls
+    if (num_in < 1)
+        memset(buffer, 0, length * 2 * sizeof(s16));
+    else
+        for (int i = num_in; i < length; i++)
+            ((u32*)buffer)[i] = ((u32*)buffer)[num_in - 1];
+
+    thread_local std::vector<s16> bgmbuf;
+    bgmbuf.resize(length * 2);
+    bgm.SetOutputRate(outputRate);
+    bgm.Render(bgmbuf.data(), length);
+
+    // apply the user volume before clamping, so peaks that fit after attenuation are not clipped
+    s32 vol = volume;
+    for (int i = 0; i < length * 2; i++)
+        buffer[i] = (s16) std::clamp((((s32) buffer[i] + bgmbuf[i]) * vol) >> 8, -0x8000, 0x7FFF);
+
+    return length;
 }
 
 void MelonInstance::setAudioOutputSkew(double skew)
 {
     nds->SPU.SetOutputSkew(skew);
+}
+
+void MelonInstance::setFastForward(bool enabled)
+{
+    if (nds)
+        nds->SndTracker.SetFastForward(enabled);
 }
 
 bool MelonInstance::takeScreenshot()
@@ -526,6 +569,8 @@ void MelonInstance::updateConfiguration(std::shared_ptr<EmulatorConfiguration> n
     {
         nds->SPU.SetInterpolation(static_cast<AudioInterpolation>(newConfiguration->audioSettings.audioInterpolation));
         nds->SPU.SetDegrade10Bit(static_cast<AudioBitDepth>(newConfiguration->audioSettings.audioBitrate));
+        nds->SndTracker.Settings.Enabled = newConfiguration->audioSettings.nelonBgmEnabled;
+        nds->SndTracker.Settings.Interpolation = newConfiguration->audioSettings.audioInterpolation;
     }
 
     rewindManager.UpdateRewindSettings(newConfiguration->rewindEnabled, newConfiguration->rewindLengthSeconds, newConfiguration->rewindCaptureSpacingSeconds);

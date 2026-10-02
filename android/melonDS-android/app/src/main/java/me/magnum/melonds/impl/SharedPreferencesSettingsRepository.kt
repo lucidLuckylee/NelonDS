@@ -163,6 +163,7 @@ class SharedPreferencesSettingsRepository(
             useJit = isJitEnabled(),
             consoleType = consoleType,
             soundEnabled = isSoundEnabled(),
+            nelonBgmEnabled = isNelonBgmEnabled(),
             audioInterpolation = getAudioInterpolation(),
             audioBitrate = getAudioBitrate(),
             volume = getVolume(),
@@ -340,6 +341,10 @@ class SharedPreferencesSettingsRepository(
 
     override fun isSoundEnabled(): Boolean {
         return preferences.getBoolean("sound_enabled", true)
+    }
+
+    override fun isNelonBgmEnabled(): Boolean {
+        return preferences.getBoolean("nelonds_bgm_normal_speed", true)
     }
 
     private fun getRewindPeriod(): Int {

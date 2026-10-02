@@ -648,6 +648,8 @@ void* emulate(void*)
 
         auto frameStart = std::chrono::steady_clock::now();
 
+        // NelonDS: applied on the emu thread since the tracker may pick up BGM from emulated RAM here
+        MelonDSAndroid::setFastForward(isFastForwardEnabled);
         u32 nLines = MelonDSAndroid::loop();
 
         auto frameDuration = std::chrono::steady_clock::now() - frameStart;

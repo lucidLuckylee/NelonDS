@@ -36,6 +36,7 @@ struct AudioSettings
     int audioBitrate;
     int audioLatency;
     int micSource;
+    bool nelonBgmEnabled;
 };
 
 struct SdCardSettings

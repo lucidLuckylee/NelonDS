@@ -7,6 +7,11 @@ using namespace melonDS;
 
 #define INTERNAL_FRAME_RATE 59.8260982880808f
 
+// set by MelonDSAndroidJNI.cpp's emu thread
+extern bool isFastForwardEnabled;
+extern int targetFps;
+extern float fps;
+
 OboeCallback::OboeCallback(int volume, void (*onErrorCallback)(void), std::ostream* recordingStream) : _volume(volume), onErrorCallback(onErrorCallback), _recordingStream(recordingStream) {
     audioSampleFrac = 0;
 }
@@ -29,19 +34,21 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
     int len_in = getNumSamplesOut(len);
     if (len_in > numFrames) len_in = numFrames;
 
-    int num_in = currentInstance->readAudioOutput((s16*) audioData, len_in);
+    // keep sound effects at their original pitch while fast-forwarded: targetFps (0 = unlimited)
+    // reflects the configured multiplier, and fps is the measured achieved rate for that case
+    double speedRatio = 1.0;
+    if (isFastForwardEnabled)
+    {
+        speedRatio = (targetFps > 0) ? (targetFps / 60.0) : (fps / 60.0);
+        speedRatio = std::clamp(speedRatio, 1.0, 8.0);
+    }
+
+    int num_in = currentInstance->readAudioOutput((s16*) audioData, len_in, stream->getSampleRate(), speedRatio, _volume);
 
     if (num_in < 1)
     {
         memset(audioData, 0, len * sizeof(s16) * 2);
         return oboe::DataCallbackResult::Continue;
-    }
-
-    if (_volume < 256)
-    {
-        s16* samples = (s16*) audioData;
-        for (int i = 0; i < num_in * 2; i++)
-            samples[i] = ((s32) samples[i] * _volume) >> 8;
     }
 
     if (num_in < len_in)
