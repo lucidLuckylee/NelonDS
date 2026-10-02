@@ -104,6 +104,7 @@ NDS::NDS(NDSArgs&& args, int type, void* userdata) noexcept :
     NDSCartSlot(*this, nullptr),
     GBACartSlot(*this, nullptr),
     AREngine(*this),
+    SndTracker(*this),
     ARM9(*this, args.GDB, args.JIT.has_value()),
     ARM7(*this, args.GDB, args.JIT.has_value()),
 #ifdef GDBSTUB_ENABLED
@@ -539,6 +540,7 @@ void NDS::Reset()
     NDSCartSlot.Reset();
     GBACartSlot.Reset();
     SPU.Reset();
+    SndTracker.Reset();
     Mic.Reset();
     SPI.Reset();
     RTC.Reset();
@@ -746,6 +748,7 @@ bool NDS::DoSavestate(Savestate* file)
         GBACartSlot.DoSavestate(file);
     GPU.DoSavestate(file);
     SPU.DoSavestate(file);
+    SndTracker.DoSavestate(file);
     Mic.DoSavestate(file);
     SPI.DoSavestate(file);
     RTC.DoSavestate(file);
@@ -773,6 +776,8 @@ bool NDS::DoSavestate(Savestate* file)
 void NDS::SetNDSCart(std::unique_ptr<NDSCart::CartCommon>&& cart)
 {
     NDSCartSlot.SetCart(std::move(cart));
+    const NDSCart::CartCommon* newcart = NDSCartSlot.GetCart();
+    SndTracker.OnCartChanged(newcart ? newcart->GetROM() : nullptr, newcart ? newcart->GetROMLength() : 0);
     // The existing cart will always be ejected;
     // if cart is null, then that's equivalent to ejecting a cart
     // without inserting a new one.
@@ -1058,6 +1063,7 @@ u32 NDS::RunFrame()
 
     // Ensure the last audio samples produced for this frame are available to the frontend immediately
     SPU.BufferAudio();
+    SndTracker.OnFrame();
 
     // In the context of TASes, frame count is traditionally the primary measure of emulated time,
     // so it needs to be tracked even if NDS is powered off.
@@ -3573,6 +3579,7 @@ void NDS::ARM9IOWrite32(u32 addr, u32 val)
                 IPCFIFOCnt9 |= 0x4000;
             else
             {
+                SndTracker.OnPxiWord(val);
                 bool wasempty = IPCFIFO9.IsEmpty();
                 IPCFIFO9.Write(val);
                 if ((IPCFIFOCnt7 & 0x0400) && wasempty)

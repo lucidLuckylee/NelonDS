@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <algorithm>
 #include <cmath>
 #include "Platform.h"
 #include "NDS.h"
@@ -356,6 +357,7 @@ SPUChannel::SPUChannel(u32 num, melonDS::NDS& nds, AudioInterpolation interpolat
 void SPUChannel::Reset()
 {
     KeyOn = false;
+    HostMuted = false;
 
     SetCnt(0);
     SrcAddr = 0;
@@ -462,6 +464,7 @@ T SPUChannel::FIFO_ReadData()
 void SPUChannel::Start()
 {
     Timer = TimerReload;
+    HostMuted = NDS.SndTracker.ChannelKeyOnMuted(Num);
 
     if (((Cnt >> 29) & 0x3) == 3)
         Pos = -1;
@@ -854,6 +857,8 @@ void SPU::Mix(u32 spucycles)
 {
     s32 left = 0, right = 0;
     s32 leftoutput = 0, rightoutput = 0;
+    // NelonDS: channels playing BGM that the host renderer replaces; they keep running but are silent
+    u16 mutemask = NDS.SndTracker.MuteMask();
 
     if (Cnt & (1<<15))
     {
@@ -861,6 +866,10 @@ void SPU::Mix(u32 spucycles)
         s32 ch1 = Channels[1].DoRun(spucycles);
         s32 ch2 = Channels[2].DoRun(spucycles);
         s32 ch3 = Channels[3].DoRun(spucycles);
+        if ((mutemask & (1<<0)) || Channels[0].HostMuted) ch0 = 0;
+        if ((mutemask & (1<<1)) || Channels[1].HostMuted) ch1 = 0;
+        if ((mutemask & (1<<2)) || Channels[2].HostMuted) ch2 = 0;
+        if ((mutemask & (1<<3)) || Channels[3].HostMuted) ch3 = 0;
 
         // TODO: addition from capture registers
         Channels[0].PanOutput(ch0, left, right);
@@ -874,7 +883,8 @@ void SPU::Mix(u32 spucycles)
             SPUChannel* chan = &Channels[i];
 
             s32 channel = chan->DoRun(spucycles);
-            chan->PanOutput(channel, left, right);
+            if (!(mutemask & (1<<i)) && !chan->HostMuted)
+                chan->PanOutput(channel, left, right);
         }
 
         // sound capture
@@ -1089,6 +1099,45 @@ void SPU::InitOutput()
     memset(OutputBuffer, 0, 2*OutputBufferSize*2);
     OutputBufferReadPos = 0;
     OutputBufferWritePos = 0;
+
+    // a reset/rate change invalidates any audio the stretcher has buffered
+    Stretcher.SetRate(OutputSampleRate);
+
+    Platform::Mutex_Unlock(AudioLock);
+}
+
+// grows (never shrinks) the output ring so it can hold at least minFrames frames.
+// only called from ReadOutputStretched, so normal-speed playback never pays for it
+void SPU::GrowOutputBuffer(u32 minFrames)
+{
+    if (minFrames <= OutputBufferSize)
+        return;
+
+    u32 newSize = OutputBufferSize ? OutputBufferSize : 512;
+    while (newSize < minFrames)
+        newSize <<= 1;
+
+    Platform::Mutex_Lock(AudioLock);
+
+    s16* newBuffer = (s16*) malloc(2 * newSize * 2);
+    memset(newBuffer, 0, 2*newSize*2);
+
+    u32 avail;
+    if (OutputBufferWritePos >= OutputBufferReadPos)
+        avail = OutputBufferWritePos - OutputBufferReadPos;
+    else
+        avail = (OutputBufferSize*2) - OutputBufferReadPos + OutputBufferWritePos;
+
+    for (u32 i = 0; i < avail; i++)
+        newBuffer[i] = OutputBuffer[(OutputBufferReadPos + i) & ((2*OutputBufferSize)-1)];
+
+    if (OutputBuffer != nullptr)
+        free(OutputBuffer);
+    OutputBuffer = newBuffer;
+    OutputBufferSize = newSize;
+    OutputBufferReadPos = 0;
+    OutputBufferWritePos = avail;
+
     Platform::Mutex_Unlock(AudioLock);
 }
 
@@ -1162,6 +1211,29 @@ int SPU::ReadOutput(s16* data, int samples)
 
     Platform::Mutex_Unlock(AudioLock);
     return samples;
+}
+
+int SPU::ReadOutputStretched(s16* data, int outFrames, double speedRatio)
+{
+    // close enough to 1x: behave exactly like ReadOutput
+    if (std::fabs(speedRatio - 1.0) < 0.01)
+        return ReadOutput(data, outFrames);
+
+    u32 needed = (u32) std::ceil(outFrames * speedRatio);
+
+    // keep the ring well ahead of what a stretched read can ask for, and at
+    // least ~1 second, so high ratios don't run into it wrapping underneath us
+    GrowOutputBuffer(std::max<u32>(needed * 2, (u32) std::ceil(OutputSampleRate)));
+
+    StretchScratch.resize((size_t)needed * 2);
+    int got = ReadOutput(StretchScratch.data(), (int)needed);
+    if (got <= 0)
+        return 0;
+
+    Platform::Mutex_Lock(AudioLock);
+    int written = Stretcher.Process(StretchScratch.data(), got, data, outFrames, speedRatio);
+    Platform::Mutex_Unlock(AudioLock);
+    return written;
 }
 
 void SPU::SetOutputSampleRate(double rate)
