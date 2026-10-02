@@ -71,7 +71,7 @@ public:
     u16 MuteMask() const { return CurMuteMask; }
     // SPU: driver players whose notes are silent. A player joins when the host renderer takes it over
     // and stays until its next start, even after losing the host (its copy is at the fast-forwarded
-    // position), unless the hardware becomes its source again (see OnFrame).
+    // position) or while its voice is parked, unless the hardware becomes its source again (see OnFrame).
     u16 MutedPlayers() const { return MutedP; }
     // SPU, at key-on of channel ch: the muted player the driver's live work area says the note belongs
     // to, -1 if none. Decided per note so nothing leaks before the next per-frame snapshot.
@@ -96,6 +96,8 @@ private:
         SeqClass Cls = SeqClass::Unknown;
         const SeqInfo* Info = nullptr;   // nullptr if not found in index
         bool HostMode = false;    // host renderer is the audible source for this player
+        bool Parked = false;      // paused while hosted: its voice is parked in the renderer for the resume
+        s16 ParkFader = 0;        // ExtFader when it was parked
     };
 
     void HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3);
@@ -104,7 +106,9 @@ private:
     void EnsureIndex();           // builds the SDAT index the first time the enabled feature needs it
     bool EnterHostMode(int player, bool fromStart);  // fromStart: play from tick 0, else resync to the driver
     void LeaveHostMode();
-    void PickHost();              // fast-forwarding without a host: adopt the most recent eligible player
+    void ParkHost();              // the paused host's voice is kept for its resume, the host is free
+    bool UnparkHost(int player);  // a resumed parked player becomes the host again
+    void PickHost();              // without a host: unpark a resumed player, else when fast-forwarding adopt the most recent eligible one
     bool Eligible(const PlayerState& s) const;
     void UpdateMuteMask();
     void ApplyOutputSettings();   // passes changed Settings.Interpolation/OutputSkew to the renderer
@@ -132,15 +136,6 @@ private:
     std::array<s8, 16> ChanOwner {};   // per SPU channel: driver player, -1 unknown (from driver info)
     bool ChanOwnerValid = false;
     u32 LiveWork = 0;             // ARM7 address of the driver's SNDWork, validated by ParseDriverInfo
-    // blobs of sequences the host has played, so a re-adoption still works when the game has
-    // moved or freed the bank/wave data in RAM in the meantime
-    struct SongBlobs
-    {
-        u32 CRC = 0, BankCRC = 0;  // one sequence is played with different banks
-        std::vector<u8> MML, Bank, Swar[4];
-    };
-    std::array<SongBlobs, 6> BlobCache;
-    u32 BlobCacheNext = 0;
     u32 DriverInfoReq = 0;        // buffer of the newest READ_DRIVER_INFO (DriverInfoAddr is the previous, completed one)
     int DriverInfoLogged = -1;    // last logged parse result
     u8 TrackMuteMode[16][16] {};  // per player and track: last MUTE_TRACK mode (SNDSeqMute)

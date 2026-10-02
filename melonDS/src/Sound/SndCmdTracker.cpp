@@ -93,6 +93,7 @@ SndCmdTracker::~SndCmdTracker() = default;
 void SndCmdTracker::Reset()
 {
     Bgm.Kill();
+    Bgm.DropAllParked();
     P = {};
     HostP = -1;
     MutedP = 0;
@@ -114,8 +115,6 @@ void SndCmdTracker::Reset()
     NoHost = {};
     StartCounter = 0;
     MasterVol = 127;
-    BlobCache = {};
-    BlobCacheNext = 0;
 }
 
 void SndCmdTracker::OnCartChanged(const u8* rom, u32 romLen)
@@ -188,16 +187,15 @@ bool SndCmdTracker::CopySwar(u32 addr, std::vector<u8>& out) const
         u32 ofs = RamRead32(addr + 0x3C + i * 4);
         u32 wave = ofs >= 0x02000000 ? ofs : (ofs ? addr + ofs : 0);
         u32 newOfs = 0;
-        if (wave && IsMainRAM(wave))
+        if (wave)
         {
             // SNDWaveParam: loopstart (u16 @6) and looplen (u32 @8) in words
+            if (!IsMainRAM(wave)) return false;
             u32 len = 12 + 4 * ((RamRead32(wave + 4) >> 16) + RamRead32(wave + 8));
             std::vector<u8> w;
-            if (len <= MAX_BLOB && out.size() + len <= MAX_BLOB && CopyRAM(wave, len, w))
-            {
-                newOfs = (u32)out.size();
-                out.insert(out.end(), w.begin(), w.end());
-            }
+            if (len > MAX_BLOB || out.size() + len > MAX_BLOB || !CopyRAM(wave, len, w)) return false;
+            newOfs = (u32)out.size();
+            out.insert(out.end(), w.begin(), w.end());
         }
         memcpy(&out[0x3C + i * 4], &newOfs, 4);
     }
@@ -246,7 +244,7 @@ void SndCmdTracker::OnPxiWord(u32 word)
     }
 
     // a STOP of the host must not leave the other BGM players unmuted until the end of the frame
-    if (FF && Settings.Enabled && HostP < 0)
+    if (Settings.Enabled && HostP < 0)
         PickHost();
 }
 
@@ -277,11 +275,23 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
     case CMD_PAUSE_SEQ:
         if (a0 < 16)
         {
-            P[a0].Paused = a1 != 0;
-            if ((int)a0 == HostP)
+            int p = (int)a0;
+            P[p].Paused = a1 != 0;
+            // the driver keeps a paused player as it is (a battle theme plays on another player meanwhile),
+            // and so does the host: the voice is parked, not dropped and rebuilt on the resume
+            if (p == HostP && a1)
+                ParkHost();
+            else if (p == HostP)
             {
-                Log(LogLevel::Debug, "RealtimeBGM: host player %d %s\n", HostP, a1 ? "paused" : "resumed");
-                Bgm.Pause(a1 != 0);
+                Log(LogLevel::Debug, "RealtimeBGM: host player %d resumed\n", HostP);
+                Bgm.Pause(false);
+            }
+            // a parked player resumed while another one is hosted waits for PickHost; without
+            // fast-forward its parked voice is only the source while its hardware copy is muted
+            else if (!a1 && P[p].Parked && Settings.Enabled && (FF || (MutedP & (1 << p))))
+            {
+                if (HostP >= 0 && P[HostP].Paused) ParkHost();
+                if (HostP < 0) UnparkHost(p);
             }
         }
         break;
@@ -413,6 +423,7 @@ bool SndCmdTracker::Eligible(const PlayerState& s) const
 void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prepareOnly)
 {
     if (player == HostP) LeaveHostMode();
+    if (P[player].Parked) Bgm.DropParked(player);
     // the driver stops the old sequence; the new one's notes are tagged at key-on. The old one's
     // release tails stay silent: they would sound at the fast-forwarded pitch.
     if (MutedP & (1 << player)) NDS.SPU.RetireHostTags(player);
@@ -475,6 +486,11 @@ void SndCmdTracker::OnStop(int player)
 {
     P[player].Active = false;
     P[player].Prepared = false;
+    if (P[player].Parked)
+    {
+        Bgm.DropParked(player);
+        P[player].Parked = false;
+    }
     if (player == HostP)
         LeaveHostMode();
 }
@@ -485,8 +501,8 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
     std::vector<u8> mml, sbnk, swar[4];
 
     bool ok = s.MMLLen && CopyRAM(s.MML, s.MMLLen, mml) && CRC32(mml.data(), (int)s.MMLLen) == s.CRC;
-    // the bank must still be the one the driver plays: the game may be rebuilding its sound heap at the
-    // moment a paused song is re-adopted (e.g. right after a battle theme stops)
+    // the bank must still be the one the driver plays: the game may be rebuilding its sound heap
+    // when a song is adopted mid-play
     ok = ok && CopyBank(s.Bank, sbnk) && BankCRC32(sbnk) == s.BankCRC;
     if (ok)
     {
@@ -500,21 +516,6 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
                 Log(LogLevel::Info, "RealtimeBGM: player %d wave archive %d at %08X could not be copied\n", player, i, arc);
                 ok = false;
             }
-        }
-    }
-
-    // fall back to the blobs captured when this sequence was last hosted with this bank
-    bool cached = false;
-    if (!ok)
-    {
-        for (const SongBlobs& c : BlobCache)
-        {
-            if (c.CRC != s.CRC || c.BankCRC != s.BankCRC || c.MML.empty()) continue;
-            mml = c.MML; sbnk = c.Bank;
-            for (int i = 0; i < 4; i++) swar[i] = c.Swar[i];
-            ok = cached = true;
-            Log(LogLevel::Info, "RealtimeBGM: player %d uses cached song data\n", player);
-            break;
         }
     }
 
@@ -533,21 +534,6 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
             s.Info && !s.Info->Name.empty() ? s.Info->Name.c_str() : "?");
         NoHost[player] = true;
         return false;
-    }
-
-    // remember the blobs for later re-adoptions (ring of the last few songs), replacing an older copy
-    if (!cached)
-    {
-        SongBlobs* slot = nullptr;
-        for (SongBlobs& c : BlobCache)
-            if (c.CRC == s.CRC && c.BankCRC == s.BankCRC && !c.MML.empty()) slot = &c;
-        if (!slot)
-        {
-            slot = &BlobCache[BlobCacheNext];
-            BlobCacheNext = (BlobCacheNext + 1) % BlobCache.size();
-        }
-        slot->CRC = s.CRC; slot->BankCRC = s.BankCRC; slot->MML = mml; slot->Bank = sbnk;
-        for (int i = 0; i < 4; i++) slot->Swar[i] = swar[i];
     }
 
     if (HostP >= 0) LeaveHostMode();
@@ -606,14 +592,76 @@ void SndCmdTracker::LeaveHostMode()
     UpdateMuteMask();
 }
 
+void SndCmdTracker::ParkHost()
+{
+    PlayerState& s = P[HostP];
+    Bgm.Park(HostP);
+    s.Parked = true;
+    s.ParkFader = s.ExtFader;
+    s.HostMode = false;
+    // the player stays muted: its hardware copy is still ahead of the parked voice
+    Log(LogLevel::Info, "RealtimeBGM: host player %d paused, voice parked\n", HostP);
+    HostP = -1;
+    UpdateMuteMask();
+}
+
+bool SndCmdTracker::UnparkHost(int player)
+{
+    PlayerState& s = P[player];
+    s.Parked = false;
+    if (!Bgm.Unpark(player))
+        return false;
+
+    // what the game changed while the player was paused
+    ApplyOutputSettings();
+    Bgm.SetMasterVolume(MasterVol);
+    Bgm.SetChannelMask(s.ChanMask ? s.ChanMask : 0xFFFF);
+    Bgm.SetTempoRatio(s.TempoRatio);
+    if (s.ExtFader != s.ParkFader) Bgm.SetExtFader(s.ExtFader);
+    for (int t = 0; t < 16; t++)
+    {
+        Bgm.SetTrackMute(1 << t, TrackMuteMode[player][t]);
+        Bgm.SetTrackFader(1 << t, TrackFader[player][t]);
+        Bgm.SetTrackPitch(1 << t, TrackPitch[player][t]);
+        Bgm.SetTrackPan(1 << t, TrackPan[player][t]);
+    }
+    if (SharedWork)
+    {
+        for (int i = 0; i < 16; i++)
+            Bgm.SetVariable((u8)(16 + i), (s16)RamRead32(SharedWork + SHARED_GLOBAL_VAR_OFS + i * 2));
+    }
+
+    HostP = player;
+    s.HostMode = true;
+    MutedP |= 1 << player;
+    NDS.SPU.RetagHostNotes();
+    UpdateMuteMask();
+    Log(LogLevel::Info, "RealtimeBGM: host renderer resumes parked player %d (%s) at tick %u, mute mask %04X\n", player,
+        s.Info && !s.Info->Name.empty() ? s.Info->Name.c_str() : "?", Bgm.Tick(), CurMuteMask);
+    return true;
+}
+
 void SndCmdTracker::PickHost()
 {
-    u32 status = SharedWork ? RamRead32(SharedWork + 4) : 0xFFFF;
+    // a resumed parked player gets its own voice back (see CMD_PAUSE_SEQ)
     int best = -1;
     for (int p = 0; p < 16; p++)
     {
         const PlayerState& s = P[p];
-        if (!s.Active || s.Prepared || NoHost[p] || !(status & (1 << p)) || !Eligible(s)) continue;
+        if (!s.Parked || s.Paused || !(FF || (MutedP & (1 << p)))) continue;
+        if (best < 0 || StartOrder[p] > StartOrder[best]) best = p;
+    }
+    if (best >= 0 && UnparkHost(best))
+        return;
+    if (!FF)
+        return;
+
+    u32 status = SharedWork ? RamRead32(SharedWork + 4) : 0xFFFF;
+    best = -1;
+    for (int p = 0; p < 16; p++)
+    {
+        const PlayerState& s = P[p];
+        if (!s.Active || s.Prepared || s.Parked || NoHost[p] || !(status & (1 << p)) || !Eligible(s)) continue;
         if (best < 0 || StartOrder[p] > StartOrder[best]) best = p;
     }
     if (best >= 0)
@@ -761,6 +809,12 @@ void SndCmdTracker::OnFrame()
     if (!Settings.Enabled)
     {
         if (HostP >= 0) LeaveHostMode();
+        for (int p = 0; p < 16; p++)
+        {
+            if (!P[p].Parked) continue;
+            Bgm.DropParked(p);
+            P[p].Parked = false;
+        }
         if (MutedP)
         {
             MutedP = 0;
@@ -790,14 +844,20 @@ void SndCmdTracker::OnFrame()
         }
     }
 
-    if (FF && Settings.Enabled && HostP < 0)
+    if (Settings.Enabled && HostP < 0)
         PickHost();
 
-    // A muted player the host does not follow stays silent only while fast-forward may adopt it again.
-    // Otherwise the hardware becomes its source again. Stopped players stay muted for their release tails.
+    // A muted player the host does not follow stays silent only while fast-forward may adopt it again
+    // or while it is paused with its voice parked. Otherwise the hardware becomes its source again.
+    // Stopped players stay muted for their release tails.
     for (int p = 0; p < 16; p++)
     {
-        if (p == HostP || !(MutedP & (1 << p)) || !P[p].Active || (FF && !NoHost[p])) continue;
+        if (p == HostP || !(MutedP & (1 << p)) || !P[p].Active || (FF && !NoHost[p]) || (P[p].Parked && P[p].Paused)) continue;
+        if (P[p].Parked)
+        {
+            Bgm.DropParked(p);
+            P[p].Parked = false;
+        }
         MutedP &= ~(1 << p);
         Log(LogLevel::Debug, "RealtimeBGM: player %d unmuted, hardware plays it again\n", p);
     }
@@ -874,7 +934,9 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
 
     if (file->Saving) return;
 
+    // parked voices are not saved: a paused player is adopted again from RAM (PickHost)
     Bgm.Kill();
+    Bgm.DropAllParked();
     HostP = -1;
     MutedP = 0;
     NoHost = {};
@@ -886,6 +948,7 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
     {
         s.Info = s.MMLLen ? Idx.Lookup(s.CRC, s.MMLLen) : nullptr;
         s.HostMode = false;
+        s.Parked = false;
     }
     if (host >= 0 && host < 16 && FF && Settings.Enabled)
         EnterHostMode(host, false);
