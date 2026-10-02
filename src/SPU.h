@@ -82,7 +82,7 @@ public:
     u8 Pan = 0;
 
     bool KeyOn = false;
-    s8 HostMutedPlayer = -1;  // RealtimeBGM: host player this note belongs to (-1 = none); muted while that player is the host
+    s8 HostMutedPlayer = -1;  // RealtimeBGM: muted driver player this note belongs to (-1 = none); silent while that player is in SndCmdTracker::MutedPlayers()
     u32 Timer = 0;
     s32 Pos = 0;
     s16 PrevSample[3] {};
@@ -271,6 +271,13 @@ public:
     void Write8(u32 addr, u8 val);
     void Write16(u32 addr, u16 val);
     void Write32(u32 addr, u32 val);
+
+    // RealtimeBGM: tags the sounding notes with the muted player that owns them (host adoption, first
+    // driver snapshot after a savestate load). Notes no muted player owns keep their tag: they may be the
+    // release tails of a stopped player.
+    void RetagHostNotes();
+    // RealtimeBGM: forgets every note's owner (feature disabled, reset)
+    void ClearHostTags();
 
 private:
     void GrowOutputBuffer(u32 minFrames);

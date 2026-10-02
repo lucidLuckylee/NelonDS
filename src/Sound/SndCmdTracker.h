@@ -69,9 +69,13 @@ public:
 
     // SPU: channels whose output must be dropped from the hardware mix right now.
     u16 MuteMask() const { return CurMuteMask; }
-    // SPU, at key-on of channel ch: true if the driver's live work area says the note belongs to the
-    // host player. Decided per note so nothing leaks before the next per-frame snapshot.
-    bool ChannelKeyOnMuted(int ch);
+    // SPU: driver players whose notes are silent. A player joins when the host renderer takes it over
+    // and stays until its next start, even after losing the host (its copy is at the fast-forwarded
+    // position), unless the hardware becomes its source again (see OnFrame).
+    u16 MutedPlayers() const { return MutedP; }
+    // SPU, at key-on of channel ch: the muted player the driver's live work area says the note belongs
+    // to, -1 if none. Decided per note so nothing leaks before the next per-frame snapshot.
+    int ChannelKeyOnOwner(int ch);
     int HostPlayer() const { return HostP; }   // driver player the renderer follows, -1 if none
 
     BgmRenderer& Renderer() { return Bgm; }
@@ -114,6 +118,7 @@ private:
     std::array<PlayerState, 16> P;
     bool FF = false;
     int HostP = -1;               // driver player the renderer follows, -1 if none
+    u16 MutedP = 0;               // see MutedPlayers()
     u16 CurMuteMask = 0;
     u32 SharedWork = 0;           // ARM9 address of SNDSharedWork
     u32 DriverInfoAddr = 0;       // ARM9 address of the last READ_DRIVER_INFO buffer
@@ -125,6 +130,7 @@ private:
     int DriverInfoLogged = -1;    // last logged parse result
     std::array<u16, 16> TrackMute {};   // per player: tracks muted by MUTE_TRACK
     std::array<u32, 16> StartOrder {};  // per player: StartCounter value at its last start
+    std::array<u32, 16> StartFrame {};  // per player: FrameCount at its last start
     std::array<bool, 16> NoHost {};     // per player: host mode failed or finished for this start
     u32 StartCounter = 0;
     u32 FrameCount = 0;           // emulated frames, for the 1x pace of fader changes

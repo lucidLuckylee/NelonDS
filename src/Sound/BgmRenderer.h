@@ -41,6 +41,7 @@ public:
     // mml: sequence data (what START_SEQ arg1 points at), mmlLen from the SSEQ header.
     // sbnk: whole SBNK file (what the bank pointer points at). swar[i]: whole SWAR files
     // referenced by the SBNK header (nullptr/0 if slot unused). Returns false on parse failure.
+    // The playing song is not affected (also on failure); Start() switches to the loaded one.
     bool Load(const u8* mml, u32 mmlLen,
               const u8* sbnk, u32 sbnkLen,
               const u8* const swar[4], const u32 swarLen[4]);
@@ -56,7 +57,7 @@ public:
     void Release(u32 fadeMs);
     void Stop();                 // Release() with the default fade, unload nothing
     void Kill();                 // immediate silence of both voices (reset, savestate load)
-    void Pause(bool paused);     // pauses both voices
+    void Pause(bool paused);     // pauses the current voice; the outgoing one plays out
     bool Active() const;         // has output: Playing() or the outgoing voice still sounding
     bool Playing() const;        // current song playing (not stopped, not finished)
 

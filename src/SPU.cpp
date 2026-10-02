@@ -387,6 +387,8 @@ void SPUChannel::DoSavestate(Savestate* file)
     file->Var8(&Pan);
 
     file->Var8((u8*)&KeyOn);
+    if (!file->Saving)
+        HostMutedPlayer = -1; // RealtimeBGM: not saved, the tracker re-tags after the load
     file->Var32(&Timer);
     file->Var32((u32*)&Pos);
     file->VarArray(PrevSample, sizeof(PrevSample));
@@ -464,7 +466,7 @@ T SPUChannel::FIFO_ReadData()
 void SPUChannel::Start()
 {
     Timer = TimerReload;
-    HostMutedPlayer = NDS.SndTracker.ChannelKeyOnMuted(Num) ? (s8)NDS.SndTracker.HostPlayer() : -1;
+    HostMutedPlayer = (s8)NDS.SndTracker.ChannelKeyOnOwner(Num);
 
     if (((Cnt >> 29) & 0x3) == 3)
         Pos = -1;
@@ -853,13 +855,33 @@ void SPUCaptureUnit::Run(u32 cycles, s32 sample)
 }
 
 
+void SPU::RetagHostNotes()
+{
+    for (SPUChannel& chan : Channels)
+    {
+        if (!(chan.Cnt & (1<<31))) continue;
+        int owner = NDS.SndTracker.ChannelKeyOnOwner(chan.Num);
+        if (owner >= 0) chan.HostMutedPlayer = (s8)owner;
+    }
+}
+
+void SPU::ClearHostTags()
+{
+    for (SPUChannel& chan : Channels)
+        chan.HostMutedPlayer = -1;
+}
+
 void SPU::Mix(u32 spucycles)
 {
     s32 left = 0, right = 0;
     s32 leftoutput = 0, rightoutput = 0;
     // NelonDS: channels playing BGM that the host renderer replaces; they keep running but are silent
     u16 mutemask = NDS.SndTracker.MuteMask();
-    int hostplayer = NDS.SndTracker.HostPlayer();
+    u16 mutedplayers = NDS.SndTracker.MutedPlayers();
+    auto muted = [mutemask, mutedplayers](const SPUChannel& chan)
+    {
+        return (mutemask & (1<<chan.Num)) || (chan.HostMutedPlayer >= 0 && (mutedplayers & (1<<chan.HostMutedPlayer)));
+    };
 
     if (Cnt & (1<<15))
     {
@@ -867,10 +889,10 @@ void SPU::Mix(u32 spucycles)
         s32 ch1 = Channels[1].DoRun(spucycles);
         s32 ch2 = Channels[2].DoRun(spucycles);
         s32 ch3 = Channels[3].DoRun(spucycles);
-        if ((mutemask & (1<<0)) || (hostplayer >= 0 && Channels[0].HostMutedPlayer == hostplayer)) ch0 = 0;
-        if ((mutemask & (1<<1)) || (hostplayer >= 0 && Channels[1].HostMutedPlayer == hostplayer)) ch1 = 0;
-        if ((mutemask & (1<<2)) || (hostplayer >= 0 && Channels[2].HostMutedPlayer == hostplayer)) ch2 = 0;
-        if ((mutemask & (1<<3)) || (hostplayer >= 0 && Channels[3].HostMutedPlayer == hostplayer)) ch3 = 0;
+        if (muted(Channels[0])) ch0 = 0;
+        if (muted(Channels[1])) ch1 = 0;
+        if (muted(Channels[2])) ch2 = 0;
+        if (muted(Channels[3])) ch3 = 0;
 
         // TODO: addition from capture registers
         Channels[0].PanOutput(ch0, left, right);
@@ -884,7 +906,7 @@ void SPU::Mix(u32 spucycles)
             SPUChannel* chan = &Channels[i];
 
             s32 channel = chan->DoRun(spucycles);
-            if (!(mutemask & (1<<i)) && !(hostplayer >= 0 && chan->HostMutedPlayer == hostplayer))
+            if (!muted(*chan))
                 chan->PanOutput(channel, left, right);
         }
 
