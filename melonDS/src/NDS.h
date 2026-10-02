@@ -43,6 +43,7 @@
 #include "CRC32.h"
 #include "DMA.h"
 #include "FreeBIOS.h"
+#include "Sound/SndCmdTracker.h"
 
 // when touching the main loop/timing code, pls test a lot of shit
 // with this enabled, to make sure it doesn't desync
@@ -330,6 +331,7 @@ public: // TODO: Encapsulate the rest of these members
     GBACart::GBACartSlot GBACartSlot;
     melonDS::GPU GPU;
     melonDS::AREngine AREngine;
+    Sound::SndCmdTracker SndTracker;
 
     const u32 ARM7WRAMSize = 0x10000;
     u8* ARM7WRAM;

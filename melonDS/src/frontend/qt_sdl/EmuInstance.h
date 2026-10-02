@@ -229,6 +229,7 @@ private:
     void updateFastForwardMute(bool fastForward);
     void audioSync();
     void audioUpdateSettings();
+    void updateRealtimeBgmSettings();
 
     void micOpen();
     void micClose();

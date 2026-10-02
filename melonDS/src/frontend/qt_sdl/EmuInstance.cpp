@@ -1385,6 +1385,8 @@ bool EmuInstance::updateConsole() noexcept
     else
         nds->SetGBACart(std::move(nextgbacart));
 
+    updateRealtimeBgmSettings();
+
     renderLock.unlock();
 
     loadCheats();

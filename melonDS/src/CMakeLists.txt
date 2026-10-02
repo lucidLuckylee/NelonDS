@@ -54,6 +54,11 @@ add_library(core STATIC
     SPI.cpp
     SPI_Firmware.cpp
     SPU.cpp
+    Sound/SdatIndex.cpp
+    Sound/BgmRenderer.cpp
+    Sound/SndCmdTracker.cpp
+    Sound/TimeStretch.h
+    Sound/TimeStretch.cpp
     types.h
     Utils.cpp
     Utils.h
@@ -173,6 +178,9 @@ if (MELONDS_EMBED_BUILD_INFO)
 endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/version.h")
+file(GLOB REALTIMEBGM_SSEQPLAYER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/Sound/SSEQPlayer/*.cpp")
+target_sources(core PRIVATE ${REALTIMEBGM_SSEQPLAYER_SRC})
+
 target_sources(core PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 target_include_directories(core PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
 
