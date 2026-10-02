@@ -125,10 +125,23 @@ private:
     bool DriverInfoPending = false;
     std::array<s8, 16> ChanOwner {};   // per SPU channel: driver player, -1 unknown (from driver info)
     bool ChanOwnerValid = false;
-    u32 LiveWork = 0;             // ARM7 address of the driver's SNDWork, validated by ParseDriverInfo
+    u32 LiveWork = 0;
+    // blobs of sequences the host has played, so a re-adoption still works when the game has
+    // moved or freed the bank/wave data in RAM in the meantime
+    struct SongBlobs
+    {
+        u32 CRC = 0;
+        std::vector<u8> MML, Bank, Swar[4];
+    };
+    std::array<SongBlobs, 6> BlobCache;
+    u32 BlobCacheNext = 0;             // ARM7 address of the driver's SNDWork, validated by ParseDriverInfo
     u32 DriverInfoReq = 0;        // buffer of the newest READ_DRIVER_INFO (DriverInfoAddr is the previous, completed one)
     int DriverInfoLogged = -1;    // last logged parse result
     std::array<u16, 16> TrackMute {};   // per player: tracks muted by MUTE_TRACK
+    // per player and track: TRACK_PARAM values, applied when the player becomes the host
+    s16 TrackFader[16][16] {};
+    s16 TrackPitch[16][16] {};
+    s8 TrackPan[16][16] {};
     std::array<u32, 16> StartOrder {};  // per player: StartCounter value at its last start
     std::array<u32, 16> StartFrame {};  // per player: FrameCount at its last start
     std::array<bool, 16> NoHost {};     // per player: host mode failed or finished for this start

@@ -94,6 +94,9 @@ void SndCmdTracker::Reset()
     ChanOwner.fill(-1);
     ChanOwnerValid = false;
     TrackMute = {};
+    memset(TrackFader, 0, sizeof(TrackFader));
+    memset(TrackPitch, 0, sizeof(TrackPitch));
+    memset(TrackPan, 0, sizeof(TrackPan));
     StartOrder = {};
     StartFrame = {};
     NoHost = {};
@@ -274,8 +277,17 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
     case CMD_TRACK_PARAM:
         {
             u32 player = a0 & 0xFFFFFF, size = a0 >> 24;
-            if ((int)player != HostP) break;
+            if (player >= 16) break;
             s32 val = size == 1 ? (s32)(s8)a3 : size == 2 ? (s32)(s16)a3 : (s32)a3;
+            // remembered for every player so a host adopted mid-song starts with the real track levels
+            for (int t = 0; t < 16; t++)
+            {
+                if (!(a1 & (1 << t))) continue;
+                if (a2 == 0xA) TrackFader[player][t] = (s16)val;
+                else if (a2 == 0xC) TrackPitch[player][t] = (s16)val;
+                else if (a2 == 9) TrackPan[player][t] = (s8)val;
+            }
+            if ((int)player != HostP) break;
             if (a2 == 0xA) Bgm.SetTrackFader((u16)a1, (s16)val);
             else if (a2 == 0xC) Bgm.SetTrackPitch((u16)a1, (s16)val);
             else if (a2 == 9) Bgm.SetTrackPan((u16)a1, (s8)val);
@@ -365,6 +377,9 @@ void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prep
     s.MML = mml;
     s.Bank = bank;
     TrackMute[player] = 0;
+    memset(TrackFader[player], 0, sizeof(TrackFader[player]));
+    memset(TrackPitch[player], 0, sizeof(TrackPitch[player]));
+    memset(TrackPan[player], 0, sizeof(TrackPan[player]));
     NoHost[player] = false;
     StartOrder[player] = ++StartCounter;
     StartFrame[player] = FrameCount;
@@ -415,13 +430,28 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
     std::vector<u8> mml, sbnk, swar[4];
 
     bool ok = s.MMLLen && CopyRAM(s.MML, s.MMLLen, mml) && CRC32(mml.data(), (int)s.MMLLen) == s.CRC;
+    // Bank and wave data live in the game's sound heap, which it may be rebuilding at the moment a
+    // paused song is re-adopted (e.g. right after a battle theme stops). The blobs captured when the
+    // song was first started are the ones the driver is playing, so prefer them.
+    bool cached = false;
     if (ok)
+    {
+        for (const SongBlobs& c : BlobCache)
+        {
+            if (c.CRC != s.CRC || c.MML.empty()) continue;
+            sbnk = c.Bank;
+            for (int i = 0; i < 4; i++) swar[i] = c.Swar[i];
+            cached = true;
+            break;
+        }
+    }
+    if (ok && !cached)
     {
         u32 bsize = RamRead32(s.Bank + 8);
         ok = IsMainRAM(s.Bank) && RamRead32(s.Bank) == MAGIC_SBNK && bsize >= 0x3C && bsize <= MAX_BLOB
             && CopyRAM(s.Bank, bsize, sbnk);
     }
-    if (ok)
+    if (ok && !cached)
     {
         // SNDBankData.waveArcLink[4] (8 bytes each: waveArc, next) follows the 0x18-byte headers;
         // SND_AssignWaveArc fills waveArc with the address of the loaded SWAR.
@@ -429,7 +459,25 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
         {
             u32 arc = RamRead32(s.Bank + 0x18 + i * 8);
             if (arc && !CopySwar(arc, swar[i]))
+            {
+                Log(LogLevel::Info, "RealtimeBGM: player %d wave archive %d at %08X could not be copied\n", player, i, arc);
                 swar[i].clear();
+                ok = false;
+            }
+        }
+    }
+
+    // fall back to the blobs captured when this sequence was first hosted
+    if (!ok)
+    {
+        for (const SongBlobs& c : BlobCache)
+        {
+            if (c.CRC != s.CRC || c.MML.empty()) continue;
+            mml = c.MML; sbnk = c.Bank;
+            for (int i = 0; i < 4; i++) swar[i] = c.Swar[i];
+            ok = true;
+            Log(LogLevel::Info, "RealtimeBGM: player %d uses cached song data\n", player);
+            break;
         }
     }
 
@@ -450,6 +498,20 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
         return false;
     }
 
+    // remember the blobs for later re-adoptions (ring of the last few songs)
+    {
+        bool known = false;
+        for (const SongBlobs& c : BlobCache)
+            if (c.CRC == s.CRC && !c.MML.empty()) known = true;
+        if (!known)
+        {
+            SongBlobs& c = BlobCache[BlobCacheNext];
+            BlobCacheNext = (BlobCacheNext + 1) % BlobCache.size();
+            c.CRC = s.CRC; c.MML = mml; c.Bank = sbnk;
+            for (int i = 0; i < 4; i++) c.Swar[i] = swar[i];
+        }
+    }
+
     if (HostP >= 0) LeaveHostMode();
 
     // the driver keeps the player's notes on its allocatable channels (all of them until ALLOCATABLE_CHANNEL)
@@ -457,10 +519,17 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
     ApplyOutputSettings();
     u32 tick = fromStart ? 0 : TickCounter(player);
     Bgm.Start(tick);
+    Log(LogLevel::Debug, "RealtimeBGM: host enter player %d tick %u fader %d tempo %u paused %d\n", player, tick, s.ExtFader, s.TempoRatio, s.Paused);
     Bgm.SetMasterVolume(MasterVol);
     Bgm.SetExtFader(s.ExtFader);
     Bgm.SetTempoRatio(s.TempoRatio);
     if (TrackMute[player]) Bgm.MuteTracks(TrackMute[player], true);
+    for (int t = 0; t < 16; t++)
+    {
+        if (TrackFader[player][t]) Bgm.SetTrackFader(1 << t, TrackFader[player][t]);
+        if (TrackPitch[player][t]) Bgm.SetTrackPitch(1 << t, TrackPitch[player][t]);
+        if (TrackPan[player][t]) Bgm.SetTrackPan(1 << t, TrackPan[player][t]);
+    }
     if (!fromStart && SharedWork)
     {
         // the driver's current variables, including those set by the game mid-song
