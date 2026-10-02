@@ -23,6 +23,7 @@
 #include <math.h>
 #include <mutex>
 #include <string.h>
+#include <stdio.h>
 #include "BgmRenderer.h"
 #include "SSEQPlayer/Player.h"
 
