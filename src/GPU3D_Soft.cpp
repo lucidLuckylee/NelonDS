@@ -89,7 +89,8 @@ void SoftRenderer3D::SetupRenderThread()
 
 void SoftRenderer3D::EnableRenderThread()
 {
-    if (Threaded && Sema_RenderStart)
+    // with frameskip there may be no render in flight to (re)start
+    if (Threaded && Sema_RenderStart && GPU.Is3DRenderPending())
     {
         Platform::Semaphore_Post(Sema_RenderStart);
     }

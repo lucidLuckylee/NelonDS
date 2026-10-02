@@ -114,6 +114,7 @@ DefaultList<bool> DefaultBools =
     {"Instance*.RTC.SyncToHost", true},
     {"Audio.RealtimeBGM", true},
     {"Audio.FastForwardStretch", true},
+    {"Video.FastForwardFrameskip", true},
 };
 
 DefaultList<std::string> DefaultStrings =

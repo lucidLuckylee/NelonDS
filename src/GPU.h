@@ -593,6 +593,21 @@ public:
 
     void Restart3DFrame() noexcept;
 
+    // Frameskip (for fast-forward): only one frame out of every renderEveryN is rendered,
+    // 1 renders every frame. Only the pixel output is skipped, emulation is unaffected.
+    // A frame is always rendered when display capture is enabled in it (the capture writes
+    // to VRAM), and the frame after one in which capture was enabled is rendered too, as
+    // its 3D render (which the capture may read) has to be started in the frame before.
+    void SetFrameSkip(int renderEveryN) noexcept;
+    // whether the last finished frame was rendered, ie. the framebuffers hold a new picture
+    bool FrameWasRendered() const noexcept { return LastFrameRendered; }
+    // render the next frame regardless of the frameskip (when called between frames,
+    // that is the frame about to start)
+    void ForceRenderNextFrame() noexcept { ForceRender = true; }
+    // whether a 3D render was started that is not finished yet
+    // (the threaded software renderer may only render when this is set)
+    bool Is3DRenderPending() const noexcept { return Rendering3D; }
+
     void DisplayFIFO(u32 x) noexcept;
 
     void SetDispStat(u32 cpu, u16 val, u16 mask) noexcept;
@@ -794,6 +809,9 @@ private:
 
     void SetDispStatIRQ(int cpu, int num);
 
+    void Start3DFrame() noexcept;
+    void RenderSkippedFrame() noexcept;
+
     bool UsesDisplayFIFO();
     void SampleDisplayFIFO(u32 offset, u32 num);
 
@@ -801,6 +819,16 @@ private:
     u16 NextVCount = 0;
 
     bool RunFIFO = false;
+
+    int FrameSkipInterval = 1;
+    int FrameSkipCounter = 0;
+    bool RenderCurFrame = true;
+    bool RenderNextFrame = true;
+    bool Rendering3D = true;
+    bool Skipped3D = false;
+    bool LastFrameRendered = true;
+    bool ForceRender = false;
+    u8 CaptureHistory = 0; // bit 0: capture in the current frame, bit 1: in the previous one
 
     u16 VMatch[2] {};
 

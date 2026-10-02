@@ -111,6 +111,13 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QCheckBox" name="cbFastForwardFrameskip">
+        <property name="text">
+         <string>Skip rendering frames the display can't show during fast-forward</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
