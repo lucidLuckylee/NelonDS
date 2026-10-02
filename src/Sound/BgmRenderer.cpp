@@ -21,7 +21,9 @@
 */
 
 #include <math.h>
+#include <algorithm>
 #include <mutex>
+#include <vector>
 #include <string.h>
 #include <stdio.h>
 #include "BgmRenderer.h"
@@ -52,6 +54,7 @@ constexpr int SilentFader = -723;      // SND_CalcChannelVolume clamps the total
 constexpr u32 DefaultReleaseMs = 250;
 constexpr double FadeInSeconds = 0.04;
 constexpr int RenderChunk = 128;       // frames between fader updates, below the 5.2 ms sequencer period
+constexpr size_t MaxParked = 4;
 
 // One rendered song: the player, the fader glide and an output gain ramp.
 struct Voice
@@ -154,12 +157,34 @@ struct Voice
         return false;
     }
 };
+
+// Driver-side parameters of the current song as last set by the game. The driver resets them when a
+// sequence starts (InitPlayer/InitTrack), so Load() resets them; Start() applies them.
+struct SongParams
+{
+    s16 ExtFader;
+    u16 TempoRatio;
+    s16 TrackFader[16];
+    s16 TrackPitch[16];
+    s8 TrackPan[16];
+    u16 TrackMute;
+    s16 Variables[32];
+    u32 VariablesSet;
+    u16 ChannelMask = 0xFFFF;  // survives Load()
+};
+
+struct ParkedVoice
+{
+    int Key;
+    Voice V;
+    SongParams Params;
+};
 }
 
-struct BgmRenderer::Impl
+struct BgmRenderer::Impl : SongParams
 {
     // Guards Cur, Out, OutActive, Playing, OutputRate, OutputSkew and Interp, which Render() uses
-    // from the audio thread. Loaded and the parameter copies below are only touched by the emu thread.
+    // from the audio thread. Loaded, Parked and the parameter copies are only touched by the emu thread.
     mutable std::mutex Lock;
     Voice Cur;                   // current song
     Voice Out;                   // outgoing song, fading out
@@ -170,19 +195,8 @@ struct BgmRenderer::Impl
     SP::Interpolation Interp = SP::INTERPOLATION_NONE;
 
     std::shared_ptr<Song> Loaded;
-
-    // Driver-side parameters as last set by the game. The driver resets them when a
-    // sequence starts (InitPlayer/InitTrack), so Load() resets them; Start() applies them.
-    s16 ExtFader;
-    u16 TempoRatio;
-    s16 TrackFader[16];
-    s16 TrackPitch[16];
-    s8 TrackPan[16];
-    u16 TrackMute;
-    s16 Variables[32];
-    u32 VariablesSet;
+    std::vector<ParkedVoice> Parked;  // oldest first
     u8 MasterVolume = 127; // hardware setting, survives Load()
-    u16 ChannelMask = 0xFFFF;
 
     void ResetParams()
     {
@@ -212,6 +226,17 @@ struct BgmRenderer::Impl
     {
         ply.SetSampleRate(Rate());
         ply.interpolation = Interp;
+    }
+
+    // Under Lock: the current song becomes the outgoing voice. Returns the previous outgoing voice,
+    // to be freed outside the lock.
+    Voice ReleaseCur(u32 fadeMs)
+    {
+        Voice old = std::move(Out);
+        Out = std::move(Cur);
+        Out.ReleaseSeconds = fadeMs / 1000.0;
+        OutActive = true;
+        return old;
     }
 
     void ApplyParams(SP::Player& ply) const
@@ -347,10 +372,7 @@ void BgmRenderer::Release(u32 fadeMs)
         std::lock_guard<std::mutex> lock(P->Lock);
         P->Playing = false;
         P->Configure(*ply);
-        old = std::move(P->Out);
-        P->Out = std::move(P->Cur);
-        P->Out.ReleaseSeconds = fadeMs / 1000.0;
-        P->OutActive = true;
+        old = P->ReleaseCur(fadeMs);
         P->Cur.Ply = std::move(ply);
         P->Cur.ResetFader(P->ExtFader);
         P->Cur.Gain = 1;
@@ -381,6 +403,78 @@ void BgmRenderer::Pause(bool paused)
 {
     std::lock_guard<std::mutex> lock(P->Lock);
     P->Cur.Ply->SetPaused(paused);
+}
+
+void BgmRenderer::Park(int key)
+{
+    double rate;
+    {
+        std::lock_guard<std::mutex> lock(P->Lock);
+        if (!P->Playing || P->Cur.Ply->Finished())
+            return;
+        rate = P->Rate();
+    }
+    DropParked(key);
+
+    ParkedVoice slot;
+    slot.Key = key;
+    slot.Params = *P;
+    auto ply = P->NewPlayer(rate);
+    {
+        std::lock_guard<std::mutex> lock(P->Lock);
+        P->Playing = false;
+        P->Configure(*ply);
+        slot.V = std::move(P->Cur);
+        P->Cur.Ply = std::move(ply);
+        P->Cur.ResetFader(P->ExtFader);
+        P->Cur.Gain = 1;
+        P->Cur.GainRate = 0;
+    }
+
+    // the driver releases the notes on pause; a parked voice renders nothing, so they end here
+    slot.V.Ply->SetPaused(true);
+    for (auto& chn : slot.V.Ply->channels)
+        chn.Kill();
+    P->Parked.push_back(std::move(slot));
+    if (P->Parked.size() > MaxParked)
+        P->Parked.erase(P->Parked.begin());
+}
+
+bool BgmRenderer::Unpark(int key)
+{
+    auto it = std::find_if(P->Parked.begin(), P->Parked.end(), [key](const ParkedVoice& v) { return v.Key == key; });
+    if (it == P->Parked.end())
+        return false;
+    ParkedVoice slot = std::move(*it);
+    P->Parked.erase(it);
+
+    static_cast<SongParams&>(*P) = slot.Params;
+    slot.V.Ply->outputVol = P->MasterVolume == 127 ? 128 : P->MasterVolume;
+    slot.V.Ply->SetPaused(false);
+    Voice old;  // freed outside the lock
+    {
+        std::lock_guard<std::mutex> lock(P->Lock);
+        P->Configure(*slot.V.Ply);
+        if (P->Playing && !P->Cur.Ply->Finished())
+            old = P->ReleaseCur(DefaultReleaseMs);
+        else
+            old = std::move(P->Cur);
+        P->Cur = std::move(slot.V);
+        P->Playing = true;
+    }
+    return true;
+}
+
+void BgmRenderer::DropParked(int key)
+{
+    auto it = std::find_if(P->Parked.begin(), P->Parked.end(), [key](const ParkedVoice& v) { return v.Key == key; });
+    if (it != P->Parked.end())
+        P->Parked.erase(it);
+}
+
+void BgmRenderer::DropAllParked()
+{
+    P->Parked.clear();
 }
 
 bool BgmRenderer::Active() const
