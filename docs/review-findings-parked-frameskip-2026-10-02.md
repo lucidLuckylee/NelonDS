@@ -23,3 +23,13 @@ Cores identical except the OpenGL ES port, CMake ENet handling, and three residu
 - melonDS-android-lib/src/frontend/qt_sdl/EmuThread.cpp:443 still has the old round-to-nearest rule. Not built on Android.
 
 JNI and MelonInstance hooks match desktop semantics.
+
+## Status (triage 2026-10-02)
+
+- Finding 1: fixed, desktop 32ea398d / android-lib b5834592.
+- Finding 2: fixed, same commits.
+- Finding 3: fixed, same commits.
+- Finding 4: kept, known limitation.
+- SPU.cpp residue: fixed, android-lib b5834592 (copied from desktop).
+- EmuThread.cpp residue: synced, android-lib b5834592.
+- ARM_InstrInfo.cpp: kept, intended Android JIT change.
