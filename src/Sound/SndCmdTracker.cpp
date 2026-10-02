@@ -41,8 +41,8 @@ namespace
 enum : u32
 {
     CMD_START_SEQ = 0, CMD_STOP_SEQ = 1, CMD_PREPARE_SEQ = 2, CMD_START_PREPARED_SEQ = 3, CMD_PAUSE_SEQ = 4,
-    CMD_PLAYER_PARAM = 6, CMD_TRACK_PARAM = 7, CMD_MUTE_TRACK = 8, CMD_ALLOCATABLE_CHANNEL = 9,
-    CMD_PLAYER_LOCAL_VAR = 10, CMD_MASTER_VOLUME = 23, CMD_SHARED_WORK = 29, CMD_INVALIDATE_SEQ = 30,
+    CMD_SKIP_SEQ = 5, CMD_PLAYER_PARAM = 6, CMD_TRACK_PARAM = 7, CMD_MUTE_TRACK = 8, CMD_ALLOCATABLE_CHANNEL = 9,
+    CMD_PLAYER_LOCAL_VAR = 10, CMD_PLAYER_GLOBAL_VAR = 11, CMD_MASTER_VOLUME = 23, CMD_SHARED_WORK = 29, CMD_INVALIDATE_SEQ = 30,
     CMD_INVALIDATE_BANK = 31, CMD_READ_DRIVER_INFO = 33,
 };
 
@@ -65,9 +65,21 @@ constexpr u32 MAX_FADER_GAP = 4;
 constexpr u32 MAX_MML = 0x100000;
 constexpr u32 MAX_BLOB = 0x400000;
 
+// SNDSharedWork.globalVariable[16], after the 0x20-byte header and 16 per-player blocks of 36 bytes
+constexpr u32 SHARED_GLOBAL_VAR_OFS = 0x20 + 16 * 36;
+
+constexpr u32 SAVESTATE_VERSION = 1;
+
 bool IsMainRAM(u32 addr) { return (addr >> 24) == 0x02; }
 
 u32 Get32(const u8* p) { u32 v; memcpy(&v, p, 4); return v; }
+
+// SBNK CRC without SNDBankData.waveArcLink[4] (0x18-0x37): NNS rewrites those pointers as banks sharing
+// a wave archive are loaded and freed, so they would make one bank look like another
+u32 BankCRC32(const std::vector<u8>& sbnk)
+{
+    return CRC32(sbnk.data() + 0x38, (int)sbnk.size() - 0x38, CRC32(sbnk.data(), 0x18));
+}
 
 }
 
@@ -93,7 +105,7 @@ void SndCmdTracker::Reset()
     DriverInfoLogged = -1;
     ChanOwner.fill(-1);
     ChanOwnerValid = false;
-    TrackMute = {};
+    memset(TrackMuteMode, 0, sizeof(TrackMuteMode));
     memset(TrackFader, 0, sizeof(TrackFader));
     memset(TrackPitch, 0, sizeof(TrackPitch));
     memset(TrackPan, 0, sizeof(TrackPan));
@@ -102,17 +114,31 @@ void SndCmdTracker::Reset()
     NoHost = {};
     StartCounter = 0;
     MasterVol = 127;
+    BlobCache = {};
+    BlobCacheNext = 0;
 }
 
 void SndCmdTracker::OnCartChanged(const u8* rom, u32 romLen)
 {
     Reset();
     Idx.Clear();
-    if (!rom) return;
+    IdxBuilt = false;
+    Rom = rom;
+    RomLen = romLen;
+}
 
-    Idx.Build(rom, romLen);
+void SndCmdTracker::EnsureIndex()
+{
+    if (IdxBuilt || !Settings.Enabled || !Rom) return;
+    IdxBuilt = true;
+
+    Idx.Build(Rom, RomLen);
     Log(LogLevel::Info, "RealtimeBGM: index has %u sequences in %u SDATs\n",
         (u32)Idx.Sequences().size(), (u32)Idx.SdatNames().size());
+    // players started while the feature was disabled
+    for (PlayerState& s : P)
+        if (s.MMLLen && (s.Info = Idx.Lookup(s.CRC, s.MMLLen)))
+            s.Cls = s.Info->Cls;
 }
 
 u32 SndCmdTracker::RamRead32(u32 addr) const
@@ -130,6 +156,13 @@ bool SndCmdTracker::CopyRAM(u32 addr, u32 len, std::vector<u8>& out) const
     for (u32 i = 0; i < len; i++)
         out[i] = NDS.MainRAM[(addr + i) & NDS.MainRAMMask];
     return true;
+}
+
+bool SndCmdTracker::CopyBank(u32 addr, std::vector<u8>& out) const
+{
+    if (!IsMainRAM(addr) || RamRead32(addr) != MAGIC_SBNK) return false;
+    u32 size = RamRead32(addr + 8);
+    return size >= 0x3C && size <= MAX_BLOB && CopyRAM(addr, size, out);
 }
 
 // Copies a loaded SWAR. Wave archives loaded wave-by-wave (NNS "single load") contain only the
@@ -253,6 +286,16 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
         }
         break;
 
+    case CMD_SKIP_SEQ:
+        // the driver releases the notes and runs the sequence a1 ticks ahead; the host does the same
+        // from its own position, which is behind the driver's after fast-forward
+        if ((int)a0 == HostP)
+        {
+            Bgm.Start(Bgm.Tick() + a1);
+            if (P[a0].Paused) Bgm.Pause(true);
+        }
+        break;
+
     case CMD_PLAYER_PARAM:
         if (a0 < 16)
         {
@@ -295,11 +338,11 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
         break;
 
     case CMD_MUTE_TRACK:
-        if (a0 < 16)
+        if (a0 < 16 && a2 <= 3)
         {
-            if (a2) TrackMute[a0] |= (u16)a1;
-            else TrackMute[a0] &= ~(u16)a1;
-            if ((int)a0 == HostP) Bgm.MuteTracks((u16)a1, a2 != 0);
+            for (int t = 0; t < 16; t++)
+                if (a1 & (1 << t)) TrackMuteMode[a0][t] = (u8)a2;
+            if ((int)a0 == HostP) Bgm.SetTrackMute((u16)a1, (int)a2);
         }
         break;
 
@@ -313,6 +356,11 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
 
     case CMD_PLAYER_LOCAL_VAR:
         if ((int)a0 == HostP && a1 < 16) Bgm.SetVariable((u8)a1, (s16)a2);
+        break;
+
+    case CMD_PLAYER_GLOBAL_VAR:
+        // shared by all players; the renderer keeps them after the local ones
+        if (HostP >= 0 && a0 < 16) Bgm.SetVariable((u8)(16 + a0), (s16)a1);
         break;
 
     case CMD_MASTER_VOLUME:
@@ -365,8 +413,11 @@ bool SndCmdTracker::Eligible(const PlayerState& s) const
 void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prepareOnly)
 {
     if (player == HostP) LeaveHostMode();
-    // the driver stops the old sequence; the new one's notes are tagged at key-on
+    // the driver stops the old sequence; the new one's notes are tagged at key-on. The old one's
+    // release tails stay silent: they would sound at the fast-forwarded pitch.
+    if (MutedP & (1 << player)) NDS.SPU.RetireHostTags(player);
     MutedP &= ~(1 << player);
+    EnsureIndex();
 
     PlayerState& s = P[player];
     u16 chanMask = s.ChanMask;
@@ -376,7 +427,7 @@ void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prep
     s.Prepared = prepareOnly;
     s.MML = mml;
     s.Bank = bank;
-    TrackMute[player] = 0;
+    memset(TrackMuteMode[player], 0, sizeof(TrackMuteMode[player]));
     memset(TrackFader[player], 0, sizeof(TrackFader[player]));
     memset(TrackPitch[player], 0, sizeof(TrackPitch[player]));
     memset(TrackPan[player], 0, sizeof(TrackPan[player]));
@@ -407,6 +458,10 @@ void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prep
     else
         s.MMLLen = 0;
 
+    // the bank is what tells apart starts of one sequence with different banks
+    if (CopyBank(bank, buf))
+        s.BankCRC = BankCRC32(buf);
+
     Log(LogLevel::Info, "RealtimeBGM: start player %d %s (%s) crc=%08X len=%u%s\n", player,
         s.Info && !s.Info->Name.empty() ? s.Info->Name.c_str() : "?", SeqClassName(s.Cls), s.CRC, s.MMLLen,
         prepareOnly ? " [prepared]" : "");
@@ -430,28 +485,10 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
     std::vector<u8> mml, sbnk, swar[4];
 
     bool ok = s.MMLLen && CopyRAM(s.MML, s.MMLLen, mml) && CRC32(mml.data(), (int)s.MMLLen) == s.CRC;
-    // Bank and wave data live in the game's sound heap, which it may be rebuilding at the moment a
-    // paused song is re-adopted (e.g. right after a battle theme stops). The blobs captured when the
-    // song was first started are the ones the driver is playing, so prefer them.
-    bool cached = false;
+    // the bank must still be the one the driver plays: the game may be rebuilding its sound heap at the
+    // moment a paused song is re-adopted (e.g. right after a battle theme stops)
+    ok = ok && CopyBank(s.Bank, sbnk) && BankCRC32(sbnk) == s.BankCRC;
     if (ok)
-    {
-        for (const SongBlobs& c : BlobCache)
-        {
-            if (c.CRC != s.CRC || c.MML.empty()) continue;
-            sbnk = c.Bank;
-            for (int i = 0; i < 4; i++) swar[i] = c.Swar[i];
-            cached = true;
-            break;
-        }
-    }
-    if (ok && !cached)
-    {
-        u32 bsize = RamRead32(s.Bank + 8);
-        ok = IsMainRAM(s.Bank) && RamRead32(s.Bank) == MAGIC_SBNK && bsize >= 0x3C && bsize <= MAX_BLOB
-            && CopyRAM(s.Bank, bsize, sbnk);
-    }
-    if (ok && !cached)
     {
         // SNDBankData.waveArcLink[4] (8 bytes each: waveArc, next) follows the 0x18-byte headers;
         // SND_AssignWaveArc fills waveArc with the address of the loaded SWAR.
@@ -461,21 +498,21 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
             if (arc && !CopySwar(arc, swar[i]))
             {
                 Log(LogLevel::Info, "RealtimeBGM: player %d wave archive %d at %08X could not be copied\n", player, i, arc);
-                swar[i].clear();
                 ok = false;
             }
         }
     }
 
-    // fall back to the blobs captured when this sequence was first hosted
+    // fall back to the blobs captured when this sequence was last hosted with this bank
+    bool cached = false;
     if (!ok)
     {
         for (const SongBlobs& c : BlobCache)
         {
-            if (c.CRC != s.CRC || c.MML.empty()) continue;
+            if (c.CRC != s.CRC || c.BankCRC != s.BankCRC || c.MML.empty()) continue;
             mml = c.MML; sbnk = c.Bank;
             for (int i = 0; i < 4; i++) swar[i] = c.Swar[i];
-            ok = true;
+            ok = cached = true;
             Log(LogLevel::Info, "RealtimeBGM: player %d uses cached song data\n", player);
             break;
         }
@@ -498,18 +535,19 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
         return false;
     }
 
-    // remember the blobs for later re-adoptions (ring of the last few songs)
+    // remember the blobs for later re-adoptions (ring of the last few songs), replacing an older copy
+    if (!cached)
     {
-        bool known = false;
-        for (const SongBlobs& c : BlobCache)
-            if (c.CRC == s.CRC && !c.MML.empty()) known = true;
-        if (!known)
+        SongBlobs* slot = nullptr;
+        for (SongBlobs& c : BlobCache)
+            if (c.CRC == s.CRC && c.BankCRC == s.BankCRC && !c.MML.empty()) slot = &c;
+        if (!slot)
         {
-            SongBlobs& c = BlobCache[BlobCacheNext];
+            slot = &BlobCache[BlobCacheNext];
             BlobCacheNext = (BlobCacheNext + 1) % BlobCache.size();
-            c.CRC = s.CRC; c.MML = mml; c.Bank = sbnk;
-            for (int i = 0; i < 4; i++) c.Swar[i] = swar[i];
         }
+        slot->CRC = s.CRC; slot->BankCRC = s.BankCRC; slot->MML = mml; slot->Bank = sbnk;
+        for (int i = 0; i < 4; i++) slot->Swar[i] = swar[i];
     }
 
     if (HostP >= 0) LeaveHostMode();
@@ -523,9 +561,9 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
     Bgm.SetMasterVolume(MasterVol);
     Bgm.SetExtFader(s.ExtFader);
     Bgm.SetTempoRatio(s.TempoRatio);
-    if (TrackMute[player]) Bgm.MuteTracks(TrackMute[player], true);
     for (int t = 0; t < 16; t++)
     {
+        if (TrackMuteMode[player][t]) Bgm.SetTrackMute(1 << t, TrackMuteMode[player][t]);
         if (TrackFader[player][t]) Bgm.SetTrackFader(1 << t, TrackFader[player][t]);
         if (TrackPitch[player][t]) Bgm.SetTrackPitch(1 << t, TrackPitch[player][t]);
         if (TrackPan[player][t]) Bgm.SetTrackPan(1 << t, TrackPan[player][t]);
@@ -535,6 +573,12 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
         // the driver's current variables, including those set by the game mid-song
         for (int i = 0; i < 16; i++)
             Bgm.SetVariable((u8)i, (s16)RamRead32(SharedWork + 0x20 + player * 36 + i * 2));
+    }
+    if (SharedWork)
+    {
+        // global variables outlive the sequence
+        for (int i = 0; i < 16; i++)
+            Bgm.SetVariable((u8)(16 + i), (s16)RamRead32(SharedWork + SHARED_GLOBAL_VAR_OFS + i * 2));
     }
     if (s.Paused) Bgm.Pause(true);
 
@@ -763,6 +807,14 @@ void SndCmdTracker::OnFrame()
 
 void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
 {
+    // without usable tracker state: same game, so the driver's work areas do not move
+    auto resetKeepingWork = [this]
+    {
+        u32 sw = SharedWork, dia = DriverInfoAddr, dir = DriverInfoReq;
+        Reset();
+        SharedWork = sw; DriverInfoAddr = dia; DriverInfoReq = dir;
+    };
+
     if (!file->Saving)
     {
         // Upstream savestates have no RealtimeBGM section, and a missing section is a load error,
@@ -778,16 +830,21 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
         }
         if (!found)
         {
-            Bgm.Kill();
-            u32 sw = SharedWork, dia = DriverInfoAddr, dir = DriverInfoReq;
-            Reset();
-            // same game: the driver's work areas do not move
-            SharedWork = sw; DriverInfoAddr = dia; DriverInfoReq = dir;
+            resetKeepingWork();
             return;
         }
     }
 
     file->Section("NELO");
+    u32 version = SAVESTATE_VERSION;
+    file->Var32(&version);
+    if (version != SAVESTATE_VERSION)
+    {
+        // the next Section() call finds its section by name, which skips the rest of this one
+        Log(LogLevel::Info, "RealtimeBGM: savestate section version %u not supported, tracker state reset\n", version);
+        resetKeepingWork();
+        return;
+    }
     file->Var32(&SharedWork);
     file->Var32(&DriverInfoAddr);
     file->Var32(&DriverInfoReq);
@@ -795,19 +852,20 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
     for (int p = 0; p < 16; p++)
     {
         PlayerState& s = P[p];
-        file->VarBool(&s.Active);
-        file->VarBool(&s.Prepared);
-        file->VarBool(&s.Paused);
+        file->Bool32(&s.Active);
+        file->Bool32(&s.Prepared);
+        file->Bool32(&s.Paused);
         file->Var32(&s.MML);
         file->Var32(&s.MMLLen);
         file->Var32(&s.Bank);
         file->Var32(&s.CRC);
+        file->Var32(&s.BankCRC);
         file->Var16(&s.ChanMask);
         file->Var16((u16*)&s.ExtFader);
         file->Var16(&s.TempoRatio);
         file->Var8((u8*)&s.Cls);
-        file->VarBool(&s.HostMode);
-        file->Var16(&TrackMute[p]);
+        file->Bool32(&s.HostMode);
+        file->VarArray(TrackMuteMode[p], sizeof(TrackMuteMode[p]));
         file->Var32(&StartOrder[p]);
     }
     file->Var32(&StartCounter);
@@ -823,6 +881,7 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
     ChanOwner.fill(-1);
     ChanOwnerValid = false;
     DriverInfoPending = false;
+    EnsureIndex();
     for (PlayerState& s : P)
     {
         s.Info = s.MMLLen ? Idx.Lookup(s.CRC, s.MMLLen) : nullptr;

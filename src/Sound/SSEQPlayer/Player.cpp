@@ -247,8 +247,13 @@ void Player::SetTrackMute(int trackNum, int mode)
 			Channel &chn = this->channels[j];
 			if (chn.state == CS_NONE || chn.trackId != trk.trackId)
 				continue;
+			// SND_SEQ_MUTE_STOP releases at rate 127 and frees the channel from the track
 			if (mode == 3)
-				chn.Kill();
+			{
+				chn.releaseRate = Cnv_Fall(127);
+				chn.Release();
+				chn.trackId = -1;
+			}
 			else
 				chn.Release();
 		}
