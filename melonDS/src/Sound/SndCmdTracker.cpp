@@ -83,6 +83,8 @@ void SndCmdTracker::Reset()
     Bgm.Kill();
     P = {};
     HostP = -1;
+    MutedP = 0;
+    NDS.SPU.ClearHostTags();
     CurMuteMask = 0;
     SharedWork = 0;
     DriverInfoAddr = 0;
@@ -93,6 +95,7 @@ void SndCmdTracker::Reset()
     ChanOwnerValid = false;
     TrackMute = {};
     StartOrder = {};
+    StartFrame = {};
     NoHost = {};
     StartCounter = 0;
     MasterVol = 127;
@@ -205,6 +208,10 @@ void SndCmdTracker::OnPxiWord(u32 word)
         }
         HandleCommand(c.ID, c.Args[0], c.Args[1], c.Args[2], c.Args[3]);
     }
+
+    // a STOP of the host must not leave the other BGM players unmuted until the end of the frame
+    if (FF && Settings.Enabled && HostP < 0)
+        PickHost();
 }
 
 void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
@@ -220,8 +227,10 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
         if (a0 < 16 && P[a0].Active && P[a0].Prepared)
         {
             P[a0].Prepared = false;
+            StartFrame[a0] = FrameCount;
             if (Settings.Enabled && FF && Eligible(P[a0]))
                 EnterHostMode((int)a0, true);
+            UpdateMuteMask();
         }
         break;
 
@@ -344,6 +353,8 @@ bool SndCmdTracker::Eligible(const PlayerState& s) const
 void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prepareOnly)
 {
     if (player == HostP) LeaveHostMode();
+    // the driver stops the old sequence; the new one's notes are tagged at key-on
+    MutedP &= ~(1 << player);
 
     PlayerState& s = P[player];
     u16 chanMask = s.ChanMask;
@@ -356,6 +367,7 @@ void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prep
     TrackMute[player] = 0;
     NoHost[player] = false;
     StartOrder[player] = ++StartCounter;
+    StartFrame[player] = FrameCount;
 
     // NNS passes the sequence data of a whole SSEQ file, so the header sits right before it.
     // A non-zero offset means a sequence inside an SSAR, which the host renderer does not handle.
@@ -386,6 +398,7 @@ void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prep
 
     if (!prepareOnly && Settings.Enabled && FF && Eligible(s))
         EnterHostMode(player, true);
+    UpdateMuteMask();
 }
 
 void SndCmdTracker::OnStop(int player)
@@ -428,11 +441,7 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
         swarLen[i] = (u32)swar[i].size();
     }
 
-    if (HostP >= 0) LeaveHostMode();
-
-    // the driver keeps the player's notes on its allocatable channels (all of them until ALLOCATABLE_CHANNEL)
-    Bgm.SetChannelMask(s.ChanMask ? s.ChanMask : 0xFFFF);
-    ApplyOutputSettings();
+    // the current host keeps playing if this player cannot be loaded
     if (!ok || !Bgm.Load(mml.data(), s.MMLLen, sbnk.data(), (u32)sbnk.size(), swarPtr, swarLen))
     {
         Log(LogLevel::Warn, "RealtimeBGM: could not load player %d (%s) into the host renderer\n", player,
@@ -441,6 +450,11 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
         return false;
     }
 
+    if (HostP >= 0) LeaveHostMode();
+
+    // the driver keeps the player's notes on its allocatable channels (all of them until ALLOCATABLE_CHANNEL)
+    Bgm.SetChannelMask(s.ChanMask ? s.ChanMask : 0xFFFF);
+    ApplyOutputSettings();
     u32 tick = fromStart ? 0 : TickCounter(player);
     Bgm.Start(tick);
     Bgm.SetMasterVolume(MasterVol);
@@ -457,6 +471,9 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
 
     HostP = player;
     s.HostMode = true;
+    MutedP |= 1 << player;
+    // notes keyed on before this were tagged while the player was not muted
+    NDS.SPU.RetagHostNotes();
     UpdateMuteMask();
 
     Log(LogLevel::Info, "RealtimeBGM: host renderer plays player %d (%s) from tick %u, mute mask %04X\n", player,
@@ -512,28 +529,28 @@ void SndCmdTracker::UpdateMuteMask()
     u16 mask = 0;
     if (HostP >= 0 && Settings.Enabled)
     {
-        // any player started and not yet stopped counts, even before the driver sets its status
-        // bit: a sound effect's first notes must not be pre-muted on channels it may allocate
+        // a player counts while the driver reports it playing (sound effects finish without a STOP),
+        // and right after its start, before the driver sets its status bit: a sound effect's first
+        // notes must not be pre-muted on channels it may allocate
+        u32 status = SharedWork ? RamRead32(SharedWork + 4) : 0xFFFF;
         u16 others = 0;
         for (int q = 0; q < 16; q++)
-            if (q != HostP && P[q].Active)
+            if (q != HostP && P[q].Active && ((status & (1 << q)) || FrameCount - StartFrame[q] <= 2))
                 others |= P[q].ChanMask;
         u16 exclusive = P[HostP].ChanMask & ~others;
 
         if (ChanOwnerValid)
         {
-            // channels the host player owns, plus idle ones only it may allocate (a note starting
-            // there before the next snapshot would otherwise leak through)
+            // idle channels only the host may allocate (a note starting there before the next
+            // snapshot would otherwise leak through); sounding notes are muted by their tag
             for (int ch = 0; ch < 16; ch++)
-                if (ChanOwner[ch] == HostP || (ChanOwner[ch] < 0 && (exclusive & (1 << ch))))
+                if (ChanOwner[ch] < 0 && (exclusive & (1 << ch)))
                     mask |= 1 << ch;
         }
         else
             mask = exclusive;
     }
 
-    if (mask != CurMuteMask)
-        Log(LogLevel::Debug, "RealtimeBGM: mute mask %04X (host %d, owners %s)\n", mask, HostP, ChanOwnerValid ? "exact" : "fallback");
     CurMuteMask = mask;
 }
 
@@ -590,20 +607,24 @@ bool SndCmdTracker::ParseDriverInfo()
     return true;
 }
 
-bool SndCmdTracker::ChannelKeyOnMuted(int ch)
+int SndCmdTracker::ChannelKeyOnOwner(int ch)
 {
-    if (HostP < 0 || !Settings.Enabled || !ChanOwnerValid || !LiveWork) return false;
+    if (!MutedP || !Settings.Enabled || !ChanOwnerValid || !LiveWork) return -1;
 
     u32 trackBase = LiveWork + WORK_TRACK_OFS;
     u32 trk = NDS.ARM7Read32(LiveWork + ch * EXCH_SIZE + EXCH_CALLBACK_DATA_OFS);
-    if (trk < trackBase || trk >= trackBase + 32 * TRACK_SIZE || (trk - trackBase) % TRACK_SIZE) return false;
+    if (trk < trackBase || trk >= trackBase + 32 * TRACK_SIZE || (trk - trackBase) % TRACK_SIZE) return -1;
     u8 t = (u8)((trk - trackBase) / TRACK_SIZE);
 
-    u32 pl = LiveWork + WORK_PLAYER_OFS + HostP * PLAYER_SIZE;
-    if (!(NDS.ARM7Read8(pl) & 1)) return false;
-    for (int k = 0; k < 16; k++)
-        if (NDS.ARM7Read8(pl + PLAYER_TRACKS_OFS + k) == t) return true;
-    return false;
+    for (int p = 0; p < 16; p++)
+    {
+        if (!(MutedP & (1 << p))) continue;
+        u32 pl = LiveWork + WORK_PLAYER_OFS + p * PLAYER_SIZE;
+        if (!(NDS.ARM7Read8(pl) & 1)) continue;
+        for (int k = 0; k < 16; k++)
+            if (NDS.ARM7Read8(pl + PLAYER_TRACKS_OFS + k) == t) return p;
+    }
+    return -1;
 }
 
 void SndCmdTracker::ApplyOutputSettings()
@@ -624,8 +645,15 @@ void SndCmdTracker::OnFrame()
 {
     FrameCount++;
     ApplyOutputSettings();
-    if (HostP >= 0 && !Settings.Enabled)
-        LeaveHostMode();
+    if (!Settings.Enabled)
+    {
+        if (HostP >= 0) LeaveHostMode();
+        if (MutedP)
+        {
+            MutedP = 0;
+            NDS.SPU.ClearHostTags();
+        }
+    }
     if (HostP >= 0 && !Bgm.Playing() && !P[HostP].Paused)
     {
         // the host copy reached the end of a non-looping sequence
@@ -637,8 +665,11 @@ void SndCmdTracker::OnFrame()
     if (DriverInfoPending)
     {
         DriverInfoPending = false;
+        bool wasValid = ChanOwnerValid;
         ChanOwnerValid = ParseDriverInfo();
         if (!ChanOwnerValid) ChanOwner.fill(-1);
+        // notes can only be tagged with a valid snapshot (savestate load: tags were dropped)
+        if (ChanOwnerValid && !wasValid && MutedP) NDS.SPU.RetagHostNotes();
         if (!ChanOwnerValid && DriverInfoLogged != 0)
         {
             DriverInfoLogged = 0;
@@ -648,6 +679,15 @@ void SndCmdTracker::OnFrame()
 
     if (FF && Settings.Enabled && HostP < 0)
         PickHost();
+
+    // A muted player the host does not follow stays silent only while fast-forward may adopt it again.
+    // Otherwise the hardware becomes its source again. Stopped players stay muted for their release tails.
+    for (int p = 0; p < 16; p++)
+    {
+        if (p == HostP || !(MutedP & (1 << p)) || !P[p].Active || (FF && !NoHost[p])) continue;
+        MutedP &= ~(1 << p);
+        Log(LogLevel::Debug, "RealtimeBGM: player %d unmuted, hardware plays it again\n", p);
+    }
 
     UpdateMuteMask();
 }
@@ -709,6 +749,7 @@ void SndCmdTracker::DoSavestate(melonDS::Savestate* file)
 
     Bgm.Kill();
     HostP = -1;
+    MutedP = 0;
     NoHost = {};
     ChanOwner.fill(-1);
     ChanOwnerValid = false;
