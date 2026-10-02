@@ -363,7 +363,7 @@ SPUChannel::SPUChannel(u32 num, melonDS::NDS& nds, AudioInterpolation interpolat
 void SPUChannel::Reset()
 {
     KeyOn = false;
-    HostMuted = false;
+    HostMutedPlayer = -1;
 
     SetCnt(0);
     SrcAddr = 0;
@@ -470,7 +470,7 @@ T SPUChannel::FIFO_ReadData()
 void SPUChannel::Start()
 {
     Timer = TimerReload;
-    HostMuted = NDS.SndTracker.ChannelKeyOnMuted(Num);
+    HostMutedPlayer = NDS.SndTracker.ChannelKeyOnMuted(Num) ? (s8)NDS.SndTracker.HostPlayer() : -1;
 
     if (((Cnt >> 29) & 0x3) == 3)
         Pos = -1;
@@ -865,6 +865,7 @@ void SPU::Mix(u32 spucycles)
     s32 leftoutput = 0, rightoutput = 0;
     // RealtimeBGM: channels playing BGM that the host renderer replaces; they keep running but are silent
     u16 mutemask = NDS.SndTracker.MuteMask();
+    int hostplayer = NDS.SndTracker.HostPlayer();
 
     if (Cnt & (1<<15))
     {
@@ -872,10 +873,10 @@ void SPU::Mix(u32 spucycles)
         s32 ch1 = Channels[1].DoRun(spucycles);
         s32 ch2 = Channels[2].DoRun(spucycles);
         s32 ch3 = Channels[3].DoRun(spucycles);
-        if ((mutemask & (1<<0)) || Channels[0].HostMuted) ch0 = 0;
-        if ((mutemask & (1<<1)) || Channels[1].HostMuted) ch1 = 0;
-        if ((mutemask & (1<<2)) || Channels[2].HostMuted) ch2 = 0;
-        if ((mutemask & (1<<3)) || Channels[3].HostMuted) ch3 = 0;
+        if ((mutemask & (1<<0)) || (hostplayer >= 0 && Channels[0].HostMutedPlayer == hostplayer)) ch0 = 0;
+        if ((mutemask & (1<<1)) || (hostplayer >= 0 && Channels[1].HostMutedPlayer == hostplayer)) ch1 = 0;
+        if ((mutemask & (1<<2)) || (hostplayer >= 0 && Channels[2].HostMutedPlayer == hostplayer)) ch2 = 0;
+        if ((mutemask & (1<<3)) || (hostplayer >= 0 && Channels[3].HostMutedPlayer == hostplayer)) ch3 = 0;
 
         // TODO: addition from capture registers
         Channels[0].PanOutput(ch0, left, right);
@@ -889,7 +890,7 @@ void SPU::Mix(u32 spucycles)
             SPUChannel* chan = &Channels[i];
 
             s32 channel = chan->DoRun(spucycles);
-            if (!(mutemask & (1<<i)) && !chan->HostMuted)
+            if (!(mutemask & (1<<i)) && !(hostplayer >= 0 && chan->HostMutedPlayer == hostplayer))
                 chan->PanOutput(channel, left, right);
         }
 

@@ -72,6 +72,7 @@ public:
     // SPU, at key-on of channel ch: true if the driver's live work area says the note belongs to the
     // host player. Decided per note so nothing leaks before the next per-frame snapshot.
     bool ChannelKeyOnMuted(int ch);
+    int HostPlayer() const { return HostP; }   // driver player the renderer follows, -1 if none
 
     BgmRenderer& Renderer() { return Bgm; }
 
