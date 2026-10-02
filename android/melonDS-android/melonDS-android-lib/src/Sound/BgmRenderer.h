@@ -58,6 +58,15 @@ public:
     void Stop();                 // Release() with the default fade, unload nothing
     void Kill();                 // immediate silence of both voices (reset, savestate load)
     void Pause(bool paused);     // pauses the current voice; the outgoing one plays out
+    // Paused songs kept for their resume, like the driver keeps a paused player: Park() moves the
+    // current voice (song data, fader glide, driver parameters) aside under key, paused with its notes
+    // cut, and leaves no current song. Unpark() makes it current again and resumes it; a playing current
+    // song crossfades out as on Release(). Returns false if nothing is parked under key. Parked voices
+    // render nothing; the oldest is dropped beyond a few. Kill() keeps them.
+    void Park(int key);
+    bool Unpark(int key);
+    void DropParked(int key);
+    void DropAllParked();
     bool Active() const;         // has output: Playing() or the outgoing voice still sounding
     bool Playing() const;        // current song playing (not stopped, not finished)
     u32 Tick() const;            // current song's position, in Start() ticks
