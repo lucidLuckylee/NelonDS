@@ -10,4 +10,5 @@
     <color name="settings_secondary">#D0B9D2</color>
     <color name="settings_focus">#4E2F4D</color>
     <color name="settings_ripple">#30E890CD</color>
+    <color name="settings_track">#80E890CD</color>
 </resources>

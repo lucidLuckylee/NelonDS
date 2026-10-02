@@ -14,6 +14,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.colorResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,10 +36,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
 import androidx.fragment.app.Fragment
 import androidx.preference.PreferenceManager
@@ -85,25 +90,36 @@ private fun SoftInputBehaviourPreferencesScreen() {
         mutableStateOf(initialBehaviour)
     }
 
+    // Two columns on the Thor's landscape top screen so that all four options fit without scrolling
+    val columns = if (LocalConfiguration.current.screenWidthDp >= 600) 2 else 1
     Column(
         modifier = Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
             .selectableGroup()
-            .safeDrawingPadding(),
+            .safeDrawingPadding()
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        SoftInputBehaviour.entries.forEachIndexed { index, behaviour ->
-            SoftInputBehaviourEntry(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-                title = behaviourOptions[index],
-                description = behaviourDescriptions[index],
-                selected = softInputBehaviour == behaviour,
-                onClick = {
-                    softInputBehaviour = behaviour
-                    sharedPreferences.edit {
-                        putString("soft_input_behaviour", behaviourValues[index])
-                    }
+        SoftInputBehaviour.entries.withIndex().chunked(columns).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                row.forEach { (index, behaviour) ->
+                    SoftInputBehaviourEntry(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        title = behaviourOptions[index],
+                        description = behaviourDescriptions[index],
+                        selected = softInputBehaviour == behaviour,
+                        onClick = {
+                            softInputBehaviour = behaviour
+                            sharedPreferences.edit {
+                                putString("soft_input_behaviour", behaviourValues[index])
+                            }
+                        }
+                    )
                 }
-            )
+            }
         }
     }
 }
@@ -128,8 +144,8 @@ private fun SoftInputBehaviourEntry(
                 shape = RoundedCornerShape(18.dp),
             )
             .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(32.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(
@@ -142,11 +158,11 @@ private fun SoftInputBehaviourEntry(
         ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.body1,
+                style = MaterialTheme.typography.body1.copy(fontSize = 15.sp),
             )
             CaptionText(
                 text = description,
-                style = MaterialTheme.typography.body2,
+                style = MaterialTheme.typography.body2.copy(fontSize = 13.sp),
             )
         }
     }

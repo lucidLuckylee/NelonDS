@@ -17,6 +17,15 @@
     <style name="SettingsDialog" parent="ThemeOverlay.AppCompat.Dialog.Alert">
         <item name="android:windowBackground">@drawable/pause_menu_panel</item>
         <item name="colorAccent">@color/settings_accent</item>
+        <item name="windowMinWidthMajor">45%</item>
+        <item name="android:windowMinWidthMajor">45%</item>
+    </style>
+    <style name="SettingsMaterialDialog" parent="MaterialDialog">
+        <item name="colorPrimary">@color/settings_accent</item>
+        <item name="colorAccent">@color/settings_accent</item>
+        <item name="android:colorBackground">@color/settings_background</item>
+        <item name="colorSurface">@color/settings_surface</item>
+        <item name="alertDialogTheme">@style/SettingsDialog</item>
     </style>
     <style name="SettingsPreferences" parent="PreferenceThemeOverlay">
         <item name="android:tint">@color/settings_accent</item>

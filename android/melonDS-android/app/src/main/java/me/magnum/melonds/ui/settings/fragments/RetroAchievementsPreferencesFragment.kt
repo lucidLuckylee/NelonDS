@@ -127,7 +127,7 @@ class RetroAchievementsPreferencesFragment : BasePreferenceFragment(), Preferenc
     }
 
     private fun showLoginDialog(existingUsername: String?) {
-        val themedDialogContext = ContextThemeWrapper(requireContext(), R.style.MaterialDialog)
+        val themedDialogContext = ContextThemeWrapper(requireContext(), R.style.SettingsMaterialDialog)
         val binding = DialogRetroachievementsLoginBinding.inflate(LayoutInflater.from(themedDialogContext))
         if (existingUsername != null) {
             binding.textUsername.setText(existingUsername)

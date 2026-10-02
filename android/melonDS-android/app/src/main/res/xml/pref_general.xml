@@ -37,9 +37,10 @@
             app:ms_switchOnText="@string/on"
             app:ms_switchOffText="@string/off"
             app:ms_switchThumbColor="?android:colorAccent"
-            app:ms_switchTrackColor="@color/prefSwitchRailColor"
-            app:ms_switchOnBackgroundColor="@color/prefSwitchBackground"
-            app:ms_switchOffBackgroundColor="@color/prefSwitchBackground"
+            app:ms_switchTrackColor="@color/settings_track"
+            app:ms_switchOnBackgroundColor="@color/settings_surface"
+            app:ms_switchOffBackgroundColor="@color/settings_surface"
+            app:ms_switchTextColor="@color/settings_text"
             app:ms_switchOffExplanationText="@string/rewind_description"
             app:ms_includedPrefScreen="xml/pref_rewind" />
 

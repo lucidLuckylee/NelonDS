@@ -2,9 +2,14 @@ package me.magnum.melonds.ui.settings.fragments
 
 import android.app.ActivityManager
 import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.ViewGroup
 import androidx.core.content.getSystemService
 import androidx.preference.Preference
+import androidx.preference.PreferenceGroupAdapter
+import androidx.preference.PreferenceScreen
 import androidx.preference.SeekBarPreference
+import androidx.recyclerview.widget.RecyclerView
 import com.smp.masterswitchpreference.MasterSwitchPreferenceFragment
 import me.magnum.melonds.R
 import me.magnum.melonds.domain.model.SizeUnit
@@ -70,6 +75,19 @@ class RewindPreferencesFragment : MasterSwitchPreferenceFragment(), PreferenceFr
         }
 
         rewindInfoPreference.summary = summaryStringBuilder.toString()
+    }
+
+    override fun onCreateAdapter(preferenceScreen: PreferenceScreen): RecyclerView.Adapter<*> = SettingsCardAdapter(preferenceScreen)
+
+    override fun onCreateRecyclerView(inflater: LayoutInflater, parent: ViewGroup, state: Bundle?): RecyclerView {
+        return super.onCreateRecyclerView(inflater, parent, state).apply {
+            // The master switch and its explanation span the full width, the rewind options use two columns
+            val columns = if (resources.configuration.screenWidthDp >= 600) 2 else 1
+            val fullWidthKeys = setOf(attrs.key, "com_smp_explanation_key")
+            applySettingsCardGrid(columns) { position, _, _ ->
+                if ((adapter as PreferenceGroupAdapter).getItem(position)?.key in fullWidthKeys) columns else 1
+            }
+        }
     }
 
     override fun getTitle() =  getString(R.string.rewind)
