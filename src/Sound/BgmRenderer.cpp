@@ -239,12 +239,7 @@ bool BgmRenderer::Load(const u8* mml, u32 mmlLen,
                        const u8* sbnk, u32 sbnkLen,
                        const u8* const swar[4], const u32 swarLen[4])
 {
-    {
-        std::lock_guard<std::mutex> lock(P->Lock);
-        P->Playing = false;
-    }
-
-    // Parse outside the lock so Render() keeps running (silently) meanwhile.
+    // Parsed into Loaded only: the playing song is not touched, so it keeps playing if this fails.
     std::unique_ptr<Song> song;
     if (mml && mmlLen && sbnk && sbnkLen)
     {
@@ -277,24 +272,12 @@ bool BgmRenderer::Load(const u8* mml, u32 mmlLen,
             song.reset();
         }
     }
+    if (!song)
+        return false;
 
-    std::shared_ptr<Song> oldSong = std::move(P->Loaded);
     P->Loaded = std::move(song);
     P->ResetParams();
-
-    auto ply = P->NewPlayer(P->OutputRate);
-    std::shared_ptr<Song> oldData;
-    {
-        std::lock_guard<std::mutex> lock(P->Lock);
-        P->Configure(*ply);
-        std::swap(P->Cur.Ply, ply);
-        std::swap(P->Cur.Data, oldData);
-        P->Cur.ResetFader(0);
-        P->Cur.Gain = 1;
-        P->Cur.GainRate = 0;
-    }
-    // old player and song are freed here, outside the lock
-    return P->Loaded != nullptr;
+    return true;
 }
 
 void BgmRenderer::Start(u32 atTick)
@@ -397,8 +380,6 @@ void BgmRenderer::Pause(bool paused)
 {
     std::lock_guard<std::mutex> lock(P->Lock);
     P->Cur.Ply->SetPaused(paused);
-    if (P->OutActive)
-        P->Out.Ply->SetPaused(paused);
 }
 
 bool BgmRenderer::Active() const
