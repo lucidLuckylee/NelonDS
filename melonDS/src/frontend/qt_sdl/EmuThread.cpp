@@ -147,6 +147,13 @@ void EmuThread::run()
 
     bool fastforward = false;
     bool slowmo = false;
+
+    // fast-forward frameskip: render about one emulated frame per display refresh
+    u32 ffFrames = 0;
+    double ffMeasureTime = lastTime;
+    double ffLogTime = lastTime;
+    int ffRenderEveryN = 1;
+
     emuInstance->fastForwardToggled = false;
     emuInstance->slowmoToggled = false;
 
@@ -320,14 +327,16 @@ void EmuThread::run()
             if (emuInstance->firmwareSave)
                 emuInstance->firmwareSave->CheckFlush();
 
-            emuInstance->drawScreen();
+            bool frameRendered = emuInstance->nds->GPU.FrameWasRendered();
+            if (frameRendered)
+                emuInstance->drawScreen();
 
 #ifdef MELONCAP
             MelonCap::Update();
 #endif // MELONCAP
 
             winUpdateCount++;
-            if (winUpdateCount >= winUpdateFreq && !useOpenGL)
+            if (winUpdateCount >= winUpdateFreq && !useOpenGL && frameRendered)
             {
                 emit windowUpdate();
                 winUpdateCount = 0;
@@ -352,6 +361,20 @@ void EmuThread::run()
                 {
                     emuInstance->setVSyncGL(true);
                 }
+            }
+
+            if (fastforward && !enablefastforward)
+            {
+                // show an up to date picture right away
+                ffRenderEveryN = 1;
+                emuInstance->nds->GPU.SetFrameSkip(1);
+                emuInstance->nds->GPU.ForceRenderNextFrame();
+            }
+            else if (enablefastforward && !fastforward)
+            {
+                ffFrames = 0;
+                ffMeasureTime = SDL_GetPerformanceCounter() * perfCountsSec;
+                ffLogTime = ffMeasureTime;
             }
 
             fastforward = enablefastforward;
@@ -403,6 +426,44 @@ void EmuThread::run()
                 }
 
                 lastTime = curtime;
+            }
+
+            if (fastforward)
+            {
+                ffFrames++;
+                double time = SDL_GetPerformanceCounter() * perfCountsSec;
+                if (time - ffMeasureTime >= 0.5)
+                {
+                    double ffFPS = ffFrames / (time - ffMeasureTime);
+                    ffFrames = 0;
+                    ffMeasureTime = time;
+
+                    QScreen* screen = emuInstance->getMainWindow()->screen();
+                    int refreshRate = screen ? (int)round(screen->refreshRate()) : 0;
+                    if (refreshRate <= 0) refreshRate = 60;
+
+                    if (!globalCfg.GetBool("Video.FastForwardFrameskip"))
+                        ffRenderEveryN = 1;
+                    else
+                    {
+                        // draw one emulated frame per display refresh: round the ratio up, with a dead band
+                        // so a ratio near an integer does not flip the choice every measurement
+                        double ratio = ffFPS / refreshRate;
+                        if (ratio > ffRenderEveryN + 0.15)
+                            ffRenderEveryN = (int)ceil(ratio - 0.15);
+                        else if (ratio < ffRenderEveryN - 0.85)
+                            ffRenderEveryN = (int)ceil(ratio - 0.15);
+                        ffRenderEveryN = std::clamp(ffRenderEveryN, 1, 8);
+                    }
+                    emuInstance->nds->GPU.SetFrameSkip(ffRenderEveryN);
+
+                    if (time - ffLogTime >= 2.0)
+                    {
+                        Platform::Log(Platform::LogLevel::Debug, "FF: achieved %.1f fps, display %d Hz, renderEveryN %d\n",
+                                      ffFPS, refreshRate, ffRenderEveryN);
+                        ffLogTime = time;
+                    }
+                }
             }
 
             nframes++;
