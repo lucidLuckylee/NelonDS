@@ -50,6 +50,7 @@ public:
     int readAudioOutput(s16* buffer, int length, double outputRate, double speedRatio = 1.0, int volume = 256);
     void setAudioOutputSkew(double skew);
     void setFastForward(bool enabled);
+    void setFrameSkip(int renderEveryN);
     bool takeScreenshot();
     void loadCheats(std::list<Cheat> cheats);
     int sendNetPacket(u8* data, int length);
@@ -101,6 +102,7 @@ private:
     Renderer currentRenderer;
     bool isRenderConfigurationDirty;
     int frame;
+    int frameSkip = 1;
 };
 
 }

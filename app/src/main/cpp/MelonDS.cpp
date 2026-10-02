@@ -202,6 +202,12 @@ namespace MelonDSAndroid
             instance->setFastForward(enabled);
     }
 
+    void setFrameSkip(int renderEveryN)
+    {
+        if (instance)
+            instance->setFrameSkip(renderEveryN);
+    }
+
     void start()
     {
         startAudio();

@@ -363,10 +363,17 @@ u32 MelonInstance::runFrame()
         nds->GPU.GetRenderer3D().SetOutputTexture(backBuffer, renderFrame->frameTexture);
     }
 
+    // rewind captures and screenshots need a picture of the frame they are taken on
+    if (rewindManager.ShouldCaptureState(frame + 1) || screenshotRenderer->isScreenshotPending())
+        nds->GPU.ForceRenderNextFrame();
+
     u32 nLines = nds->RunFrame();
     retroAchievementsManager->FrameUpdate();
 
-    if (!isRendererAccelerated)
+    // with frameskip the frame might not have been rendered, then the previous picture stays on screen
+    bool frameRendered = nds->GPU.FrameWasRendered();
+
+    if (frameRendered && !isRendererAccelerated)
     {
         int frontbuf = nds->GPU.FrontBuffer;
         if (nds->GPU.Framebuffer[frontbuf][0] && nds->GPU.Framebuffer[frontbuf][1])
@@ -383,7 +390,7 @@ u32 MelonInstance::runFrame()
     }
 
     bool isSleeping = nds->CPUStop & CPUStop_Sleep;
-    if (!isSleeping) [[likely]]
+    if (!isSleeping && frameRendered) [[likely]]
     {
         renderFrame->renderFence = eglCreateSyncKHR(currentDisplay, EGL_SYNC_FENCE_KHR, nullptr);
         glFlush();
@@ -405,7 +412,7 @@ u32 MelonInstance::runFrame()
 
     frame++;
     bool needsRewindCapture = rewindManager.ShouldCaptureState(frame);
-    bool needsScreenshot = screenshotRenderer->isScreenshotPending();
+    bool needsScreenshot = screenshotRenderer->isScreenshotPending() && frameRendered;
 
     if (needsRewindCapture || needsScreenshot) [[unlikely]]
         screenshotRenderer->renderScreenshot(&nds->GPU, currentRenderer, renderFrame);
@@ -525,6 +532,19 @@ void MelonInstance::setFastForward(bool enabled)
 {
     if (nds)
         nds->SndTracker.SetFastForward(enabled);
+}
+
+void MelonInstance::setFrameSkip(int renderEveryN)
+{
+    if (!nds)
+        return;
+
+    // show an up to date picture right away when frameskip ends (ie. fast-forward stops)
+    if (renderEveryN == 1 && frameSkip > 1)
+        nds->GPU.ForceRenderNextFrame();
+
+    frameSkip = renderEveryN;
+    nds->GPU.SetFrameSkip(renderEveryN);
 }
 
 bool MelonInstance::takeScreenshot()
