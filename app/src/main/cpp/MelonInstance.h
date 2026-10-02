@@ -80,6 +80,7 @@ private:
     void setBatteryLevels();
     void setDateTime();
     void saveRewindState(RewindSaveState* rewindSaveState);
+    void copyGpuFramebuffers(GLuint screenTexture, int scale, GLuint frameTexture);
 
 private:
     int instanceId;
@@ -100,6 +101,8 @@ private:
     std::unique_ptr<ScreenshotRenderer> screenshotRenderer;
     RewindManager rewindManager;
     Renderer currentRenderer;
+    int renderScale = 1;
+    GLuint frameCopyFramebuffers[2] = { 0, 0 };
     bool isRenderConfigurationDirty;
     int frame;
     int frameSkip = 1;

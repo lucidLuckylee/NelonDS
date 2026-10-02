@@ -536,8 +536,8 @@
 
     <string-array name="video_renderer_options">
         <item>Software</item>
-        <item>OpenGL</item>
-        <item>Compute</item>
+        <item>OpenGL (2D and 3D on GPU)</item>
+        <item>Compute (OpenGL 2D, compute 3D)</item>
     </string-array>
 
     <string-array name="video_internal_resolution_options">
