@@ -82,7 +82,7 @@ public:
     u8 Pan = 0;
 
     bool KeyOn = false;
-    bool HostMuted = false;   // RealtimeBGM: note belongs to the host-rendered BGM, drop it from the mix
+    s8 HostMutedPlayer = -1;  // RealtimeBGM: host player this note belongs to (-1 = none); muted while that player is the host
     u32 Timer = 0;
     s32 Pos = 0;
     s16 PrevSample[3] {};
