@@ -69,6 +69,9 @@ public:
 
     // SPU: channels whose output must be dropped from the hardware mix right now.
     u16 MuteMask() const { return CurMuteMask; }
+    // SPU, at key-on of channel ch: true if the driver's live work area says the note belongs to the
+    // host player. Decided per note so nothing leaks before the next per-frame snapshot.
+    bool ChannelKeyOnMuted(int ch);
 
     BgmRenderer& Renderer() { return Bgm; }
 
@@ -116,6 +119,7 @@ private:
     bool DriverInfoPending = false;
     std::array<s8, 16> ChanOwner {};   // per SPU channel: driver player, -1 unknown (from driver info)
     bool ChanOwnerValid = false;
+    u32 LiveWork = 0;             // ARM7 address of the driver's SNDWork, validated by ParseDriverInfo
     u32 DriverInfoReq = 0;        // buffer of the newest READ_DRIVER_INFO (DriverInfoAddr is the previous, completed one)
     int DriverInfoLogged = -1;    // last logged parse result
     std::array<u16, 16> TrackMute {};   // per player: tracks muted by MUTE_TRACK

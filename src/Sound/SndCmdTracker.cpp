@@ -233,7 +233,11 @@ void SndCmdTracker::HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3)
         if (a0 < 16)
         {
             P[a0].Paused = a1 != 0;
-            if ((int)a0 == HostP) Bgm.Pause(a1 != 0);
+            if ((int)a0 == HostP)
+            {
+                Log(LogLevel::Debug, "RealtimeBGM: host player %d %s\n", HostP, a1 ? "paused" : "resumed");
+                Bgm.Pause(a1 != 0);
+            }
         }
         break;
 
@@ -528,6 +532,8 @@ void SndCmdTracker::UpdateMuteMask()
             mask = exclusive;
     }
 
+    if (mask != CurMuteMask)
+        Log(LogLevel::Debug, "RealtimeBGM: mute mask %04X (host %d, owners %s)\n", mask, HostP, ChanOwnerValid ? "exact" : "fallback");
     CurMuteMask = mask;
 }
 
@@ -553,6 +559,7 @@ bool SndCmdTracker::ParseDriverInfo()
         if (match) { work = wa; workSize = size; break; }
     }
     if (!work) return false;
+    LiveWork = work;
 
     u32 trackBase = work + WORK_TRACK_OFS;
     for (u32 ch = 0; ch < 16; ch++)
@@ -583,6 +590,22 @@ bool SndCmdTracker::ParseDriverInfo()
     return true;
 }
 
+bool SndCmdTracker::ChannelKeyOnMuted(int ch)
+{
+    if (HostP < 0 || !Settings.Enabled || !ChanOwnerValid || !LiveWork) return false;
+
+    u32 trackBase = LiveWork + WORK_TRACK_OFS;
+    u32 trk = NDS.ARM7Read32(LiveWork + ch * EXCH_SIZE + EXCH_CALLBACK_DATA_OFS);
+    if (trk < trackBase || trk >= trackBase + 32 * TRACK_SIZE || (trk - trackBase) % TRACK_SIZE) return false;
+    u8 t = (u8)((trk - trackBase) / TRACK_SIZE);
+
+    u32 pl = LiveWork + WORK_PLAYER_OFS + HostP * PLAYER_SIZE;
+    if (!(NDS.ARM7Read8(pl) & 1)) return false;
+    for (int k = 0; k < 16; k++)
+        if (NDS.ARM7Read8(pl + PLAYER_TRACKS_OFS + k) == t) return true;
+    return false;
+}
+
 void SndCmdTracker::ApplyOutputSettings()
 {
     if (Settings.Interpolation != AppliedInterp)
@@ -606,6 +629,7 @@ void SndCmdTracker::OnFrame()
     if (HostP >= 0 && !Bgm.Playing() && !P[HostP].Paused)
     {
         // the host copy reached the end of a non-looping sequence
+        Log(LogLevel::Info, "RealtimeBGM: host copy of player %d finished\n", HostP);
         NoHost[HostP] = true;
         LeaveHostMode();
     }

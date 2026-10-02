@@ -363,6 +363,7 @@ SPUChannel::SPUChannel(u32 num, melonDS::NDS& nds, AudioInterpolation interpolat
 void SPUChannel::Reset()
 {
     KeyOn = false;
+    HostMuted = false;
 
     SetCnt(0);
     SrcAddr = 0;
@@ -469,6 +470,7 @@ T SPUChannel::FIFO_ReadData()
 void SPUChannel::Start()
 {
     Timer = TimerReload;
+    HostMuted = NDS.SndTracker.ChannelKeyOnMuted(Num);
 
     if (((Cnt >> 29) & 0x3) == 3)
         Pos = -1;
@@ -870,10 +872,10 @@ void SPU::Mix(u32 spucycles)
         s32 ch1 = Channels[1].DoRun(spucycles);
         s32 ch2 = Channels[2].DoRun(spucycles);
         s32 ch3 = Channels[3].DoRun(spucycles);
-        if (mutemask & (1<<0)) ch0 = 0;
-        if (mutemask & (1<<1)) ch1 = 0;
-        if (mutemask & (1<<2)) ch2 = 0;
-        if (mutemask & (1<<3)) ch3 = 0;
+        if ((mutemask & (1<<0)) || Channels[0].HostMuted) ch0 = 0;
+        if ((mutemask & (1<<1)) || Channels[1].HostMuted) ch1 = 0;
+        if ((mutemask & (1<<2)) || Channels[2].HostMuted) ch2 = 0;
+        if ((mutemask & (1<<3)) || Channels[3].HostMuted) ch3 = 0;
 
         // TODO: addition from capture registers
         Channels[0].PanOutput(ch0, left, right);
@@ -887,7 +889,7 @@ void SPU::Mix(u32 spucycles)
             SPUChannel* chan = &Channels[i];
 
             s32 channel = chan->DoRun(spucycles);
-            if (!(mutemask & (1<<i)))
+            if (!(mutemask & (1<<i)) && !chan->HostMuted)
                 chan->PanOutput(channel, left, right);
         }
 
