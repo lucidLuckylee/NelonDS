@@ -43,7 +43,7 @@ private:
 public:
     ScreenshotRenderer(u32* screenshotBuffer);
     void init();
-    void renderScreenshot(GPU* gpu, Renderer renderer, Frame* renderFrame);
+    void renderScreenshot(GPU* gpu, Frame* renderFrame);
     u32* getScreenshot();
 
     bool takeScreenshot();

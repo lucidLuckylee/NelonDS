@@ -1,6 +1,8 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <jni.h>
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <sstream>
 #include <stdlib.h>
@@ -50,6 +52,10 @@ int targetFps;
 float fastForwardSpeedMultiplier;
 bool limitFps = true;
 bool isFastForwardEnabled = false;
+// NelonDS: fast-forward frameskip
+bool fastForwardFrameskip = true;
+float displayRefreshRate = 60;
+int renderEveryN = 1;
 
 jobject globalCameraManager;
 MelonDSAndroidCameraHandler* androidCameraHandler;
@@ -65,6 +71,7 @@ Java_me_magnum_melonds_MelonEmulator_setupEmulator(JNIEnv* env, jobject thiz, jo
 {
     MelonDSAndroid::EmulatorConfiguration finalEmulatorConfiguration = MelonDSAndroidConfiguration::buildEmulatorConfiguration(env, emulatorConfiguration);
     fastForwardSpeedMultiplier = finalEmulatorConfiguration.fastForwardSpeedMultiplier;
+    fastForwardFrameskip = finalEmulatorConfiguration.fastForwardFrameskip;
 
     globalCameraManager = env->NewGlobalRef(cameraManager);
 
@@ -540,6 +547,13 @@ Java_me_magnum_melonds_MelonEmulator_setFastForwardEnabled(JNIEnv* env, jobject 
 }
 
 JNIEXPORT void JNICALL
+Java_me_magnum_melonds_MelonEmulator_setDisplayRefreshRate(JNIEnv* env, jobject thiz, jfloat refreshRate)
+{
+    if (refreshRate > 0)
+        displayRefreshRate = refreshRate;
+}
+
+JNIEXPORT void JNICALL
 Java_me_magnum_melonds_MelonEmulator_setMicrophoneEnabled(JNIEnv* env, jobject thiz, jboolean enabled)
 {
     if (enabled)
@@ -554,6 +568,7 @@ Java_me_magnum_melonds_MelonEmulator_updateEmulatorConfiguration(JNIEnv* env, jo
     MelonDSAndroid::EmulatorConfiguration newConfiguration = MelonDSAndroidConfiguration::buildEmulatorConfiguration(env, emulatorConfiguration);
 
     fastForwardSpeedMultiplier = newConfiguration.fastForwardSpeedMultiplier;
+    fastForwardFrameskip = newConfiguration.fastForwardFrameskip;
 
     MelonDSAndroid::updateEmulatorConfiguration(std::make_unique<MelonDSAndroid::EmulatorConfiguration>(std::move(newConfiguration)));
 
@@ -617,6 +632,9 @@ void* emulate(void*)
     double lastTick = startTick;
     double lastMeasureFpsTick = startTick;
     double frameLimitError = 0.0;
+    int frameskipObservedFrames = 0;
+    double lastFrameskipTick = startTick;
+    double lastFrameskipLogTick = startTick;
 
     MelonDSAndroid::start();
 
@@ -650,6 +668,7 @@ void* emulate(void*)
 
         // NelonDS: applied on the emu thread since the tracker may pick up BGM from emulated RAM here
         MelonDSAndroid::setFastForward(isFastForwardEnabled);
+        MelonDSAndroid::setFrameSkip(isFastForwardEnabled ? renderEveryN : 1);
         u32 nLines = MelonDSAndroid::loop();
 
         auto frameDuration = std::chrono::steady_clock::now() - frameStart;
@@ -695,6 +714,46 @@ void* emulate(void*)
             fps = (observedFrames * 1000.0) / (lastTick - lastMeasureFpsTick);
             lastMeasureFpsTick = lastTick;
             observedFrames = 0;
+        }
+
+        // NelonDS: while fast-forwarding, only render about one emulated frame per display refresh
+        if (isFastForwardEnabled)
+        {
+            frameskipObservedFrames++;
+            if (lastTick - lastFrameskipTick >= 500)
+            {
+                float achievedFps = (frameskipObservedFrames * 1000.0) / (lastTick - lastFrameskipTick);
+                if (!fastForwardFrameskip)
+                    renderEveryN = 1;
+                else
+                {
+                    // draw one emulated frame per display refresh: round the ratio up, with a dead band so a
+                    // ratio near an integer does not flip the choice every measurement
+                    float ratio = achievedFps / displayRefreshRate;
+                    if (ratio > renderEveryN + 0.15f)
+                        renderEveryN = (int) ceilf(ratio - 0.15f);
+                    else if (ratio < renderEveryN - 0.85f)
+                        renderEveryN = (int) ceilf(ratio - 0.15f);
+                    renderEveryN = std::clamp(renderEveryN, 1, 8);
+                }
+
+                if (lastTick - lastFrameskipLogTick >= 2000)
+                {
+                    melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "FF: achieved %.1f fps, display %d Hz, renderEveryN %d\n",
+                                           achievedFps, (int) lroundf(displayRefreshRate), renderEveryN);
+                    lastFrameskipLogTick = lastTick;
+                }
+
+                frameskipObservedFrames = 0;
+                lastFrameskipTick = lastTick;
+            }
+        }
+        else
+        {
+            renderEveryN = 1;
+            frameskipObservedFrames = 0;
+            lastFrameskipTick = lastTick;
+            lastFrameskipLogTick = lastTick;
         }
     }
 

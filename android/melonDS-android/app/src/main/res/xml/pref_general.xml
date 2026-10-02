@@ -21,6 +21,13 @@
             android:entryValues="@array/fast_forward_speed_multiplier_values"
             android:defaultValue="-1" />
 
+    <SwitchPreference
+            android:key="fast_forward_frameskip"
+            android:title="@string/fast_forward_frameskip"
+            android:summary="@string/fast_forward_frameskip_summary"
+            app:iconSpaceReserved="false"
+            android:defaultValue="true" />
+
     <com.smp.masterswitchpreference.MasterSwitchPreference
             android:key="enable_rewind"
             android:title="@string/rewind"

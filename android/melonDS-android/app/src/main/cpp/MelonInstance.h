@@ -50,6 +50,7 @@ public:
     int readAudioOutput(s16* buffer, int length, double outputRate, double speedRatio = 1.0, int volume = 256);
     void setAudioOutputSkew(double skew);
     void setFastForward(bool enabled);
+    void setFrameSkip(int renderEveryN);
     bool takeScreenshot();
     void loadCheats(std::list<Cheat> cheats);
     int sendNetPacket(u8* data, int length);
@@ -79,6 +80,7 @@ private:
     void setBatteryLevels();
     void setDateTime();
     void saveRewindState(RewindSaveState* rewindSaveState);
+    void copyGpuFramebuffers(GLuint screenTexture, int scale, GLuint frameTexture);
 
 private:
     int instanceId;
@@ -99,8 +101,11 @@ private:
     std::unique_ptr<ScreenshotRenderer> screenshotRenderer;
     RewindManager rewindManager;
     Renderer currentRenderer;
+    int renderScale = 1;
+    GLuint frameCopyFramebuffers[2] = { 0, 0 };
     bool isRenderConfigurationDirty;
     int frame;
+    int frameSkip = 1;
 };
 
 }

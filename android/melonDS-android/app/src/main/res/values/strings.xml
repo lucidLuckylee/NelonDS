@@ -169,6 +169,8 @@
     <string name="category_system_summary">Firmware settings, custom BIOS, JIT</string>
     <string name="theme">Theme</string>
     <string name="fast_forward_max_speed">Fast-forward max speed</string>
+    <string name="fast_forward_frameskip">Skip frames during fast-forward</string>
+    <string name="fast_forward_frameskip_summary">NelonDS: only render as many frames as the display can show, so fast-forward runs faster</string>
     <string name="rewind_description">When enabled, a save-state is periodically saved automatically. Whenever you want to go back on your progress by a short amount of time, just open the rewind screen and select the state that you want to resume from.\n\nBe aware that by enabling this feature, you may experience occasional stutters if your device is not powerful enough. A considerable amount of memory is also used depending on how often you want the state to be captured and for how long it should be kept.</string>
     <string name="rewind_save_period">Save period</string>
     <string name="rewind_length">Rewind length</string>
@@ -534,8 +536,8 @@
 
     <string-array name="video_renderer_options">
         <item>Software</item>
-        <item>OpenGL</item>
-        <item>Compute</item>
+        <item>OpenGL (2D and 3D on GPU)</item>
+        <item>Compute (OpenGL 2D, compute 3D)</item>
     </string-array>
 
     <string-array name="video_internal_resolution_options">

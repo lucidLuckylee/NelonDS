@@ -633,6 +633,8 @@ class EmulatorActivity : AppCompatActivity() {
     private fun updateDisplays() {
         val currentDisplay = ContextCompat.getDisplayOrDefault(this)
         val secondaryDisplay = secondaryDisplaySelector.getSecondaryDisplay(this)
+        // NelonDS: fast-forward renders about one emulated frame per display refresh
+        MelonEmulator.setDisplayRefreshRate(currentDisplay.refreshRate)
 
         val displays = deviceLayoutDisplayMapper.mapDisplaysToLayoutDisplays(currentDisplay, secondaryDisplay)
         viewModel.setConnectedDisplays(displays)

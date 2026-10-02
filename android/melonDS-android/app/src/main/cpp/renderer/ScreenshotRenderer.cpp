@@ -19,13 +19,14 @@ void ScreenshotRenderer::init()
     setupVertexBuffers();
 }
 
-void ScreenshotRenderer::renderScreenshot(GPU* gpu, Renderer renderer, Frame* renderFrame)
+void ScreenshotRenderer::renderScreenshot(GPU* gpu, Frame* renderFrame)
 {
-    if (renderer == Renderer::Software)
+    void* topBuffer;
+    void* bottomBuffer;
+    if (gpu->GetFramebuffers(&topBuffer, &bottomBuffer))
     {
-        int frontBuffer = gpu->FrontBuffer;
-        memcpy(screenshotBuffer, gpu->Framebuffer[frontBuffer][0].get(), 256 * 192 * 4);
-        memcpy(&screenshotBuffer[256 * 192], gpu->Framebuffer[frontBuffer][1].get(), 256 * 192 * 4);
+        memcpy(screenshotBuffer, topBuffer, 256 * 192 * 4);
+        memcpy(&screenshotBuffer[256 * 192], bottomBuffer, 256 * 192 * 4);
     }
     else
     {
