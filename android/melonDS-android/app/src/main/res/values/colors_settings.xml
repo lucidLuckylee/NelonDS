@@ -1,0 +1,13 @@
+<resources>
+    <color name="settings_background">#FAE3E3</color>
+    <color name="settings_ambient">#F7D4BC</color>
+    <color name="settings_surface">#FFF8FA</color>
+    <color name="settings_surface_end">#FBEFF4</color>
+    <color name="settings_border">#EFDDE6</color>
+    <color name="settings_accent">#A8235F</color>
+    <color name="settings_chip">#F8D6E6</color>
+    <color name="settings_text">#302332</color>
+    <color name="settings_secondary">#69536D</color>
+    <color name="settings_focus">#F6D8E7</color>
+    <color name="settings_ripple">#24A8235F</color>
+</resources>

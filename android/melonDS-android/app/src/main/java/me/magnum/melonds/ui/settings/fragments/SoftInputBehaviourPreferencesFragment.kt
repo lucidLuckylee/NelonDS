@@ -4,7 +4,14 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.res.colorResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +22,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.Divider
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.RadioButton
 import androidx.compose.material.Text
@@ -39,7 +45,7 @@ import me.magnum.melonds.domain.model.input.SoftInputBehaviour
 import me.magnum.melonds.ui.common.MelonPreviewSet
 import me.magnum.melonds.ui.common.component.text.CaptionText
 import me.magnum.melonds.ui.settings.PreferenceFragmentTitleProvider
-import me.magnum.melonds.ui.theme.MelonTheme
+import me.magnum.melonds.ui.settings.SettingsTheme
 
 class SoftInputBehaviourPreferencesFragment : Fragment(), PreferenceFragmentTitleProvider {
 
@@ -49,7 +55,7 @@ class SoftInputBehaviourPreferencesFragment : Fragment(), PreferenceFragmentTitl
         return ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                MelonTheme {
+                SettingsTheme {
                     SoftInputBehaviourPreferencesScreen()
                 }
             }
@@ -86,12 +92,8 @@ private fun SoftInputBehaviourPreferencesScreen() {
             .safeDrawingPadding(),
     ) {
         SoftInputBehaviour.entries.forEachIndexed { index, behaviour ->
-            if (index > 0) {
-                Divider(modifier = Modifier.padding(start = 68.dp, end = 16.dp))
-            }
-
             SoftInputBehaviourEntry(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
                 title = behaviourOptions[index],
                 description = behaviourDescriptions[index],
                 selected = softInputBehaviour == behaviour,
@@ -114,8 +116,19 @@ private fun SoftInputBehaviourEntry(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    var focused by remember { mutableStateOf(false) }
     Row(
-        modifier = modifier.clickable(onClick = onClick).padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp),
+        modifier = modifier
+            .onFocusChanged { focused = it.isFocused }
+            .clip(RoundedCornerShape(18.dp))
+            .background(colorResource(if (selected) R.color.settings_focus else R.color.settings_surface))
+            .border(
+                width = if (selected || focused) 2.dp else 1.dp,
+                color = colorResource(if (selected || focused) R.color.settings_accent else R.color.settings_border),
+                shape = RoundedCornerShape(18.dp),
+            )
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(16.dp),
         horizontalArrangement = Arrangement.spacedBy(32.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -142,7 +155,7 @@ private fun SoftInputBehaviourEntry(
 @MelonPreviewSet
 @Composable
 private fun PreviewSoftInputBehaviourPreferencesScreen() {
-    MelonTheme {
+    SettingsTheme {
         SoftInputBehaviourPreferencesScreen()
     }
 }

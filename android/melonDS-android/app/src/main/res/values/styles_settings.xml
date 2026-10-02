@@ -1,0 +1,36 @@
+<resources>
+    <style name="SettingsTheme" parent="AppTheme">
+        <item name="colorPrimary">@color/settings_accent</item>
+        <item name="colorPrimaryDark">@color/settings_background</item>
+        <item name="colorAccent">@color/settings_accent</item>
+        <item name="android:colorAccent">@color/settings_accent</item>
+        <item name="android:colorBackground">@color/settings_background</item>
+        <item name="android:windowBackground">@drawable/settings_background</item>
+        <item name="android:textColorPrimary">@color/settings_text</item>
+        <item name="android:textColorSecondary">@color/settings_secondary</item>
+        <item name="colorControlNormal">@color/settings_secondary</item>
+        <item name="colorControlActivated">@color/settings_accent</item>
+        <item name="preferenceTheme">@style/SettingsPreferences</item>
+        <item name="toolbarNavigationButtonStyle">@style/SettingsNavigation</item>
+        <item name="alertDialogTheme">@style/SettingsDialog</item>
+    </style>
+    <style name="SettingsDialog" parent="ThemeOverlay.AppCompat.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/pause_menu_panel</item>
+        <item name="colorAccent">@color/settings_accent</item>
+    </style>
+    <style name="SettingsPreferences" parent="PreferenceThemeOverlay">
+        <item name="android:tint">@color/settings_accent</item>
+    </style>
+    <style name="SettingsNavigation" parent="Widget.AppCompat.Toolbar.Button.Navigation">
+        <item name="tint">@color/settings_text</item>
+    </style>
+    <style name="PauseMenuTheme" parent="Theme.AppCompat.DayNight.Dialog">
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowBackground">@drawable/pause_menu_panel</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.65</item>
+        <item name="colorAccent">@color/settings_accent</item>
+        <item name="android:textColorPrimary">@color/settings_text</item>
+        <item name="android:textColorSecondary">@color/settings_secondary</item>
+    </style>
+</resources>

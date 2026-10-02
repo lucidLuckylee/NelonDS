@@ -860,24 +860,15 @@ class EmulatorActivity : AppCompatActivity() {
     }
 
     private fun showPauseMenu(pauseMenu: PauseMenu) {
-        val options = Array(pauseMenu.options.size) {
-            getString(pauseMenu.options[it].textResource)
-        }
-
         activeOverlays.addActiveOverlay(EmulatorOverlay.PAUSE_MENU)
-        AlertDialog.Builder(this)
-                .setTitle(R.string.pause)
-                .setItems(options) { _, which ->
-                    val selectedOption = pauseMenu.options[which]
-                    viewModel.onPauseMenuOptionSelected(selectedOption)
-                }
-                .setOnDismissListener {
-                    activeOverlays.removeActiveOverlay(EmulatorOverlay.PAUSE_MENU)
-                }
-                .setOnCancelListener {
-                    viewModel.resumeEmulator()
-                }
-                .show()
+        PauseMenuDialog(this, pauseMenu.options, viewModel::onPauseMenuOptionSelected).apply {
+            setOnDismissListener {
+                activeOverlays.removeActiveOverlay(EmulatorOverlay.PAUSE_MENU)
+            }
+            setOnCancelListener {
+                viewModel.resumeEmulator()
+            }
+        }.show()
     }
 
     private fun disableScreenTimeOut() {
