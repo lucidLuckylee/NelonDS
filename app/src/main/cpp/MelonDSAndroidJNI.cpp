@@ -723,9 +723,19 @@ void* emulate(void*)
             if (lastTick - lastFrameskipTick >= 500)
             {
                 float achievedFps = (frameskipObservedFrames * 1000.0) / (lastTick - lastFrameskipTick);
-                renderEveryN = 1;
-                if (fastForwardFrameskip)
-                    renderEveryN = std::clamp((int) lroundf(achievedFps / displayRefreshRate), 1, 8);
+                if (!fastForwardFrameskip)
+                    renderEveryN = 1;
+                else
+                {
+                    // draw one emulated frame per display refresh: round the ratio up, with a dead band so a
+                    // ratio near an integer does not flip the choice every measurement
+                    float ratio = achievedFps / displayRefreshRate;
+                    if (ratio > renderEveryN + 0.15f)
+                        renderEveryN = (int) ceilf(ratio - 0.15f);
+                    else if (ratio < renderEveryN - 0.85f)
+                        renderEveryN = (int) ceilf(ratio - 0.15f);
+                    renderEveryN = std::clamp(renderEveryN, 1, 8);
+                }
 
                 if (lastTick - lastFrameskipLogTick >= 2000)
                 {
