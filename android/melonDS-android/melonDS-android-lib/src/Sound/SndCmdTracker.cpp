@@ -135,9 +135,14 @@ void SndCmdTracker::EnsureIndex()
     Log(LogLevel::Info, "RealtimeBGM: index has %u sequences in %u SDATs\n",
         (u32)Idx.Sequences().size(), (u32)Idx.SdatNames().size());
     // players started while the feature was disabled
+    std::vector<u8> bank;
     for (PlayerState& s : P)
+    {
         if (s.MMLLen && (s.Info = Idx.Lookup(s.CRC, s.MMLLen)))
             s.Cls = s.Info->Cls;
+        if (s.Active && !s.BankCRC && Eligible(s) && CopyBank(s.Bank, bank))
+            s.BankCRC = BankCRC32(bank);
+    }
 }
 
 u32 SndCmdTracker::RamRead32(u32 addr) const
@@ -152,8 +157,12 @@ bool SndCmdTracker::CopyRAM(u32 addr, u32 len, std::vector<u8>& out) const
 {
     if (len == 0 || !IsMainRAM(addr) || !IsMainRAM(addr + len - 1)) return false;
     out.resize(len);
-    for (u32 i = 0; i < len; i++)
-        out[i] = NDS.MainRAM[(addr + i) & NDS.MainRAMMask];
+    u32 start = addr & NDS.MainRAMMask;
+    if (start + len <= NDS.MainRAMMask + 1)
+        memcpy(out.data(), &NDS.MainRAM[start], len);
+    else
+        for (u32 i = 0; i < len; i++)
+            out[i] = NDS.MainRAM[(addr + i) & NDS.MainRAMMask];
     return true;
 }
 
@@ -475,11 +484,11 @@ void SndCmdTracker::OnStart(int player, u32 mml, u32 offset, u32 bank, bool prep
     else
         s.MMLLen = 0;
 
-    // the bank is what tells apart starts of one sequence with different banks
-    if (CopyBank(bank, buf))
+    // the bank is what tells apart starts of one sequence with different banks; only a host needs it
+    if (Eligible(s) && CopyBank(bank, buf))
         s.BankCRC = BankCRC32(buf);
 
-    Log(LogLevel::Info, "RealtimeBGM: start player %d %s (%s) crc=%08X len=%u%s\n", player,
+    Log(LogLevel::Debug, "RealtimeBGM: start player %d %s (%s) crc=%08X len=%u%s\n", player,
         s.Info && !s.Info->Name.empty() ? s.Info->Name.c_str() : "?", SeqClassName(s.Cls), s.CRC, s.MMLLen,
         prepareOnly ? " [prepared]" : "");
 
@@ -525,16 +534,8 @@ bool SndCmdTracker::EnterHostMode(int player, bool fromStart)
         }
     }
 
-    const u8* swarPtr[4];
-    u32 swarLen[4];
-    for (int i = 0; i < 4; i++)
-    {
-        swarPtr[i] = swar[i].empty() ? nullptr : swar[i].data();
-        swarLen[i] = (u32)swar[i].size();
-    }
-
     // the current host keeps playing if this player cannot be loaded
-    if (!ok || !Bgm.Load(mml.data(), s.MMLLen, sbnk.data(), (u32)sbnk.size(), swarPtr, swarLen))
+    if (!ok || !Bgm.Load(mml.data(), s.MMLLen, sbnk, swar))
     {
         Log(LogLevel::Warn, "RealtimeBGM: could not load player %d (%s) into the host renderer\n", player,
             s.Info && !s.Info->Name.empty() ? s.Info->Name.c_str() : "?");
@@ -727,7 +728,7 @@ void SndCmdTracker::UpdateMuteMask()
 bool SndCmdTracker::ParseDriverInfo()
 {
     // SNDDriverInfo { SNDWork work; u32 chCtrl[16]; SNDWork* workAddress; u32 lockedChannels; u32 padding[6]; }
-    std::vector<u8> buf;
+    std::vector<u8>& buf = DriverInfoBuf;
     if (!CopyRAM(DriverInfoAddr, WORK_SIZES[0] + 72, buf)) return false;
 
     for (u32 ch = 0; ch < 16; ch++)
@@ -829,6 +830,8 @@ void SndCmdTracker::OnFrame()
             MutedP = 0;
             NDS.SPU.ClearHostTags();
         }
+        // driver info is not parsed while disabled
+        ChanOwnerValid = false;
     }
     if (HostP >= 0 && !Bgm.Playing() && !P[HostP].Paused)
     {
@@ -838,7 +841,7 @@ void SndCmdTracker::OnFrame()
         LeaveHostMode();
     }
 
-    if (DriverInfoPending)
+    if (DriverInfoPending && Settings.Enabled)
     {
         DriverInfoPending = false;
         bool wasValid = ChanOwnerValid;

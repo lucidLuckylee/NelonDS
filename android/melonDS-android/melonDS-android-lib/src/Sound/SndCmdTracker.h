@@ -53,7 +53,7 @@ public:
     void Reset();                               // on NDS reset
     void DoSavestate(melonDS::Savestate* file);
 
-    // Called by NDS::SetNDSCart with the full ROM image (may be nullptr on eject).
+    // Called by NDS::SetNDSCart with the full ROM image, and by NDS::EjectCart with nullptr.
     void OnCartChanged(const u8* rom, u32 romLen);
 
     // Called from NDS::ARM9IOWrite32 for every word written to IPCFIFOSEND (0x04000188).
@@ -133,6 +133,7 @@ private:
     u32 SharedWork = 0;           // ARM9 address of SNDSharedWork
     u32 DriverInfoAddr = 0;       // ARM9 address of the last READ_DRIVER_INFO buffer
     bool DriverInfoPending = false;
+    std::vector<u8> DriverInfoBuf;   // ParseDriverInfo's copy of the snapshot
     std::array<s8, 16> ChanOwner {};   // per SPU channel: driver player, -1 unknown (from driver info)
     bool ChanOwnerValid = false;
     u32 LiveWork = 0;             // ARM7 address of the driver's SNDWork, validated by ParseDriverInfo

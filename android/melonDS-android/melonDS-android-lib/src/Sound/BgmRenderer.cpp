@@ -22,6 +22,7 @@
 
 #include <math.h>
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include <string.h>
@@ -173,6 +174,40 @@ struct SongParams
     u16 ChannelMask = 0xFFFF;  // survives Load()
 };
 
+// What decides how the sequence goes on: the tracks (positions, stacks, waits, parameters), variables and
+// tempo, compared as raw bytes. Once a song has looped it repeats every loop period, which lets a seek skip
+// whole periods.
+struct SeqState
+{
+    u32 Jumps;   // the tracks that jumped back at this tick
+    u32 Tick;
+    u8 Tracks[sizeof(SP::Player::tracks)];
+    u8 TrackIds[sizeof(SP::Player::trackIds)];
+    s16 Variables[32];
+    u16 Tempo;
+    s16 MasterVol;
+    u8 NTracks;
+
+    void Save(const SP::Player& ply)
+    {
+        Jumps = ply.loopJumps;
+        Tick = ply.tickCounter;
+        memcpy(Tracks, (const void*)ply.tracks, sizeof(Tracks));
+        memcpy(TrackIds, ply.trackIds, sizeof(TrackIds));
+        memcpy(Variables, ply.variables, sizeof(Variables));
+        Tempo = ply.tempo;
+        MasterVol = ply.masterVol;
+        NTracks = ply.nTracks;
+    }
+
+    bool Same(const SP::Player& ply) const
+    {
+        return !memcmp(Tracks, (const void*)ply.tracks, sizeof(Tracks)) && !memcmp(TrackIds, ply.trackIds, sizeof(TrackIds))
+            && !memcmp(Variables, ply.variables, sizeof(Variables)) && Tempo == ply.tempo && MasterVol == ply.masterVol
+            && NTracks == ply.nTracks;
+    }
+};
+
 struct ParkedVoice
 {
     int Key;
@@ -193,6 +228,11 @@ struct BgmRenderer::Impl : SongParams
     double OutputRate = 48000;
     double OutputSkew = 1;
     SP::Interpolation Interp = SP::INTERPOLATION_NONE;
+
+    // Playing(), Active() and Tick() for the emu thread, which must not wait for a Render() to finish:
+    // stored under Lock whenever what they summarise may have changed, read without it
+    std::atomic<bool> PlayingNow {false}, ActiveNow {false};
+    std::atomic<u32> TickNow {0};
 
     std::shared_ptr<Song> Loaded;
     std::vector<ParkedVoice> Parked;  // oldest first
@@ -239,6 +279,15 @@ struct BgmRenderer::Impl : SongParams
         return old;
     }
 
+    // Under Lock
+    void Publish()
+    {
+        bool cur = Playing && !Cur.Ply->Finished();
+        PlayingNow.store(cur, std::memory_order_relaxed);
+        ActiveNow.store(cur || OutActive, std::memory_order_relaxed);
+        TickNow.store(Cur.Ply->tickCounter, std::memory_order_relaxed);
+    }
+
     void ApplyParams(SP::Player& ply) const
     {
         ply.extFader = ExtFader;
@@ -261,13 +310,11 @@ BgmRenderer::BgmRenderer() : P(std::make_unique<Impl>())
 
 BgmRenderer::~BgmRenderer() = default;
 
-bool BgmRenderer::Load(const u8* mml, u32 mmlLen,
-                       const u8* sbnk, u32 sbnkLen,
-                       const u8* const swar[4], const u32 swarLen[4])
+bool BgmRenderer::Load(const u8* mml, u32 mmlLen, std::vector<u8>& sbnk, std::vector<u8> (&swar)[4])
 {
     // Parsed into Loaded only: the playing song is not touched, so it keeps playing if this fails.
     std::unique_ptr<Song> song;
-    if (mml && mmlLen && sbnk && sbnkLen)
+    if (mml && mmlLen && !sbnk.empty())
     {
         song = std::make_unique<Song>();
         try
@@ -278,16 +325,15 @@ bool BgmRenderer::Load(const u8* mml, u32 mmlLen,
             song->Seq.data.insert(song->Seq.data.end(), 16, 0xFF);
             song->Seq.bank = &song->Bank;
 
-            std::vector<u8> buf(sbnk, sbnk + sbnkLen);
             SP::PseudoFile file;
-            file.data = &buf;
+            file.data = &sbnk;
             song->Bank.Read(file);
 
             for (int i = 0; i < 4; i++)
             {
-                if (!swar[i] || !swarLen[i])
+                if (swar[i].empty())
                     continue;
-                buf.assign(swar[i], swar[i] + swarLen[i]);
+                file.data = &swar[i];
                 file.pos = 0;
                 song->WaveArc[i].Read(file);
                 song->Bank.waveArc[i] = &song->WaveArc[i];
@@ -324,9 +370,28 @@ void BgmRenderer::Start(u32 atTick)
 
     if (atTick > 0)
     {
+        // The loop period is found by comparing the state after a backward jump with the state after the
+        // previous backward jump of the same tracks; from there on, whole periods are skipped.
+        std::vector<SeqState> jumps;
+        bool looped = false;
         ply->skipNotes = true;
         while (ply->tickCounter + SeekFullSimTicks < atTick && !ply->seqEnded)
+        {
             ply->RunTick();
+            if (!ply->loopJumps || looped)
+                continue;
+            auto it = std::find_if(jumps.begin(), jumps.end(), [&](const SeqState& s) { return s.Jumps == ply->loopJumps; });
+            if (it != jumps.end() && it->Same(*ply))
+            {
+                u32 period = ply->tickCounter - it->Tick;
+                ply->tickCounter += (atTick - SeekFullSimTicks - ply->tickCounter) / period * period;
+                looped = true;
+            }
+            else if (it != jumps.end())
+                it->Save(*ply);
+            else if (jumps.size() < 4)
+                jumps.emplace_back().Save(*ply);
+        }
         ply->skipNotes = false;
 
         // Same per-period work as during playback, minus mixing. Bounded in case of tempo 0.
@@ -350,6 +415,7 @@ void BgmRenderer::Start(u32 atTick)
         P->Cur.Gain = atTick > 0 ? 0 : 1;
         P->Cur.GainRate = atTick > 0 ? 1 / FadeInSeconds : 0;
         P->Playing = true;
+        P->Publish();
     }
 }
 
@@ -361,6 +427,7 @@ void BgmRenderer::Release(u32 fadeMs)
         if (!P->Playing || P->Cur.Ply->Finished())
         {
             P->Playing = false;
+            P->Publish();
             return;
         }
         rate = P->Rate();
@@ -377,6 +444,7 @@ void BgmRenderer::Release(u32 fadeMs)
         P->Cur.ResetFader(P->ExtFader);
         P->Cur.Gain = 1;
         P->Cur.GainRate = 0;
+        P->Publish();
     }
     // a previous outgoing voice is cut here, outside the lock
 }
@@ -396,6 +464,7 @@ void BgmRenderer::Kill()
         old = std::move(P->Out);
         for (auto& chn : P->Cur.Ply->channels)
             chn.Kill();
+        P->Publish();
     }
 }
 
@@ -429,6 +498,7 @@ void BgmRenderer::Park(int key)
         P->Cur.ResetFader(P->ExtFader);
         P->Cur.Gain = 1;
         P->Cur.GainRate = 0;
+        P->Publish();
     }
 
     // the driver releases the notes on pause; a parked voice renders nothing, so they end here
@@ -464,6 +534,7 @@ bool BgmRenderer::Unpark(int key)
             old = std::move(P->Cur);
         P->Cur = std::move(slot.V);
         P->Playing = true;
+        P->Publish();
     }
     return true;
 }
@@ -482,20 +553,17 @@ void BgmRenderer::DropAllParked()
 
 bool BgmRenderer::Active() const
 {
-    std::lock_guard<std::mutex> lock(P->Lock);
-    return (P->Playing && !P->Cur.Ply->Finished()) || P->OutActive;
+    return P->ActiveNow.load(std::memory_order_relaxed);
 }
 
 bool BgmRenderer::Playing() const
 {
-    std::lock_guard<std::mutex> lock(P->Lock);
-    return P->Playing && !P->Cur.Ply->Finished();
+    return P->PlayingNow.load(std::memory_order_relaxed);
 }
 
 u32 BgmRenderer::Tick() const
 {
-    std::lock_guard<std::mutex> lock(P->Lock);
-    return P->Cur.Ply->tickCounter;
+    return P->TickNow.load(std::memory_order_relaxed);
 }
 
 // extFader is in the driver's centibel (0.1 dB) volume units and is added straight onto the
@@ -666,6 +734,7 @@ void BgmRenderer::Render(s16* stereo, int frames)
         if (P->Out.OutgoingDone())
             P->OutActive = false;
     }
+    P->Publish();
 }
 
 }

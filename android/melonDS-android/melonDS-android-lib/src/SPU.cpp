@@ -1075,7 +1075,6 @@ void SPU::BufferAudio()
     blip_read_samples(BlipRight, temp + 1, avail, true);
 
     Platform::Mutex_Lock(AudioLock);
-    FramesProduced += avail;
     for (int i = 0; i < avail * 2; i += 2)
     {
         OutputBuffer[OutputBufferWritePos++] = temp[i];
@@ -1138,17 +1137,14 @@ void SPU::InitOutput()
     OutputBufferReadPos = 0;
     OutputBufferWritePos = 0;
 
-    // a reset/rate change invalidates any audio the stretcher has buffered
-    Stretcher.SetRate(OutputSampleRate);
-    FramesProduced = 0;
-    FramesRead = 0;
-    ProducedRatio = 1.0;
+    // a reset/rate change invalidates any audio the stretcher has buffered; the audio thread sets it up anew
+    StretchInit = true;
 
     Platform::Mutex_Unlock(AudioLock);
 }
 
 // grows (never shrinks) the output ring so it can hold at least minFrames frames.
-// only called from ReadOutputStretched, so normal-speed playback never pays for it
+// only called from ReadOutputStretched, so normal-speed playback never pays for it. Under AudioLock
 void SPU::GrowOutputBuffer(u32 minFrames)
 {
     if (minFrames <= OutputBufferSize)
@@ -1157,8 +1153,6 @@ void SPU::GrowOutputBuffer(u32 minFrames)
     u32 newSize = OutputBufferSize ? OutputBufferSize : 512;
     while (newSize < minFrames)
         newSize <<= 1;
-
-    Platform::Mutex_Lock(AudioLock);
 
     s16* newBuffer = (s16*) malloc(2 * newSize * 2);
     memset(newBuffer, 0, 2*newSize*2);
@@ -1178,8 +1172,6 @@ void SPU::GrowOutputBuffer(u32 minFrames)
     OutputBufferSize = newSize;
     OutputBufferReadPos = 0;
     OutputBufferWritePos = avail;
-
-    Platform::Mutex_Unlock(AudioLock);
 }
 
 int SPU::GetOutputSize() const
@@ -1228,37 +1220,19 @@ void SPU::Sync(bool wait)
     }
 }
 
-// under AudioLock
-void SPU::CountRead(int frames)
-{
-    FramesRead += frames;
-    if (FramesRead >= OutputSampleRate / 4)
-    {
-        ProducedRatio = (double) FramesProduced / FramesRead;
-        FramesProduced = 0;
-        FramesRead = 0;
-    }
-}
-
-double SPU::GetProducedRatio() const
-{
-    Platform::Mutex_Lock(AudioLock);
-    double ratio = ProducedRatio;
-    Platform::Mutex_Unlock(AudioLock);
-    return ratio;
-}
-
 int SPU::ReadOutput(s16* data, int samples)
 {
     Platform::Mutex_Lock(AudioLock);
-    CountRead(samples);
-    Platform::Mutex_Unlock(AudioLock);
-    return ReadRing(data, samples);
-}
+    // fast-forward just ended: what the stretched reads left in the ring would play late at 1x
+    // (and hold up audio sync), so keep only the newest callback's worth
+    if (Stretching)
+    {
+        Stretching = false;
+        u32 mask = (2*OutputBufferSize)-1;
+        if (((OutputBufferWritePos - OutputBufferReadPos) & mask) > (u32)samples * 2)
+            OutputBufferReadPos = (OutputBufferWritePos - samples * 2) & mask;
+    }
 
-int SPU::ReadRing(s16* data, int samples)
-{
-    Platform::Mutex_Lock(AudioLock);
     if (OutputBufferReadPos == OutputBufferWritePos)
     {
         Platform::Mutex_Unlock(AudioLock);
@@ -1286,39 +1260,46 @@ int SPU::ReadOutputStretched(s16* data, int outFrames, double speedRatio)
 {
     // close enough to 1x: behave exactly like ReadOutput
     if (std::fabs(speedRatio - 1.0) < 0.01)
-    {
-        Stretching = false;
         return ReadOutput(data, outFrames);
-    }
 
-    // keep the ring well ahead of what a stretched read can ask for, and at
-    // least ~1 second, so high ratios don't run into it wrapping underneath us
-    GrowOutputBuffer(std::max<u32>((u32) std::ceil(outFrames * speedRatio) * 2, (u32) std::ceil(OutputSampleRate)));
+    StretchScratch.resize((size_t) std::ceil(outFrames * speedRatio) * 2);
+
+    // the ring copy is all that happens under the lock; the emu thread takes it for every BufferAudio
+    Platform::Mutex_Lock(AudioLock);
+
+    // room for twice what a stretched read can ask for; an emulator faster than that overwrites the
+    // oldest audio instead of building up a backlog
+    GrowOutputBuffer((u32) std::ceil(outFrames * speedRatio) * 2);
+    u32 mask = (2*OutputBufferSize)-1;
+    int avail = (int) (((OutputBufferWritePos - OutputBufferReadPos) & mask) >> 1);
 
     // an emulator slower than speedRatio cannot keep up with it: pull at most what the ring holds beyond
     // one callback's worth, so sound effects play slower instead of underrunning
-    double ratio = std::min(speedRatio, std::max(1.0, (double) (GetOutputSize() - outFrames) / outFrames));
-    u32 needed = (u32) std::ceil(outFrames * ratio);
+    double ratio = std::min(speedRatio, std::max(1.0, (double) (avail - outFrames) / outFrames));
+    int got = std::min(avail, (int) std::ceil(outFrames * ratio));
 
-    Platform::Mutex_Lock(AudioLock);
-    CountRead(outFrames);
+    for (int i = 0; i < got * 2; i++)
+    {
+        StretchScratch[i] = OutputBuffer[OutputBufferReadPos++];
+        OutputBufferReadPos &= mask;
+    }
+
+    bool init = StretchInit;
+    double rate = OutputSampleRate;
+    if (got > 0)
+        StretchInit = false;
     Platform::Mutex_Unlock(AudioLock);
 
-    StretchScratch.resize((size_t)needed * 2);
-    int got = ReadRing(StretchScratch.data(), (int)needed);
     if (got <= 0)
         return 0;
 
-    Platform::Mutex_Lock(AudioLock);
-    // what the stretcher holds from the previous fast-forward would be spliced in
-    if (!Stretching)
-    {
+    // after InitOutput, or what the stretcher holds from the previous fast-forward would be spliced in
+    if (init)
+        Stretcher.SetRate(rate);
+    else if (!Stretching)
         Stretcher.Reset();
-        Stretching = true;
-    }
-    int written = Stretcher.Process(StretchScratch.data(), got, data, outFrames, ratio);
-    Platform::Mutex_Unlock(AudioLock);
-    return written;
+    Stretching = true;
+    return Stretcher.Process(StretchScratch.data(), got, data, outFrames, ratio);
 }
 
 void SPU::SetOutputSampleRate(double rate)
