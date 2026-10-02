@@ -21,3 +21,18 @@ Dangling ROM pointer after cart eject: NDS::EjectCart (NDS.h:372) bypasses SetND
 ## Verified clean
 
 Frameskip path, SPU mute masking, per-frame tracker work when enabled, PXI sniffer, savestate section, Android JNI hooks. Android core byte-identical outside the OpenGL ES port.
+
+## Status (triage 2026-10-03)
+
+Commits: desktop (melonDS fork, realtime-bgm-fastforward) / android-lib (nelonds-android-lib); app e7e08c0d bumps the core. Monorepo: f86049b2 (melonDS), 25b24924 (android-lib).
+
+- Finding 1 (ring backlog after fast-forward): fixed, desktop f0029745 / android-lib 73ca7ea0. The ring holds twice the per-callback pull (no one-second floor); the first passthrough read after stretching (SPU::ReadOutput, used by Qt's non-stretch path and by ReadOutputStretched near 1x on Android) keeps only the newest callback's worth.
+- Finding 2 (stretch under the SPU lock): fixed, desktop 9d9d423a / android-lib 3bf76c19. InitOutput only flags the stretcher; ReadOutputStretched locks once per callback for grow + ring copy, then SetRate/Reset/Process run unlocked on the audio thread.
+- Finding 3 (renderer flags): fixed, desktop b762eb05 / android-lib bc8d74e6. Playing/Active/Tick are relaxed atomics stored under the lock by Render() and by every control call that changes them.
+- Finding 4 (work when disabled / per SFX): fixed, desktop da8b3313 / android-lib b6fb75e6. ParseDriverInfo only when enabled, into a member buffer; CopyRAM uses memcpy unless the range wraps the RAM mirror (also serves finding 5); bank CRC only for eligible sequences (EnsureIndex fills it in for players the index reclassifies); per-start log at Debug.
+- Finding 5 (adoption hitch): fixed, desktop 3ca979dc / android-lib 54810881. Load parses the tracker's SBNK/SWAR vectors in place. SWAV::Read's per-byte conversion buffer: kept, not in this round.
+- Finding 6 (seek cost): fixed, same commits. The seek compares the sequencer state after a backward jump with the state after the previous backward jump of the same tracks and then skips whole loop periods. Output byte-identical to the full seek on five HeartGold songs; seek to tick 200000 ~1 ms instead of ~8 ms.
+- Finding 7 (interpolation history with interpolation off): kept, not in this round.
+- Finding 8 (stretcher search window): kept, not in this round.
+- Finding 9: config flags cached in updateRealtimeBgmSettings, refresh rate cached by MainWindow::onTitleUpdate on the GUI thread, ProducedRatio removed: desktop c27c3505 / android-lib 7bcc0c99. Ratio smoothing and Android copyGpuFramebuffers: kept, not in this round.
+- Dangling ROM pointer after eject: fixed, desktop 7895e613 / android-lib 7a014b2d (NDS::EjectCart calls OnCartChanged(nullptr, 0); DSi::EjectCart goes through it).
