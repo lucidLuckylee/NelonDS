@@ -1,0 +1,10 @@
+*.apk
+*.log
+*.raw
+*.wav
+melonDS/build*/
+android/melonDS-android/local.properties
+android/melonDS-android/.gradle/
+android/melonDS-android/app/build/
+android/melonDS-android/app/.cxx/
+android/melonDS-android/build/
