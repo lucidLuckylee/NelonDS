@@ -82,7 +82,7 @@ public:
     u8 Pan = 0;
 
     bool KeyOn = false;
-    s8 HostMutedPlayer = -1;  // RealtimeBGM: muted driver player this note belongs to (-1 = none); silent while that player is in SndCmdTracker::MutedPlayers()
+    s8 HostMutedPlayer = -1;  // RealtimeBGM: muted driver player this note belongs to (-1 = none); silent while that player is in SndCmdTracker::MutedPlayers(); -2 = retired, always silent
     u32 Timer = 0;
     s32 Pos = 0;
     s16 PrevSample[3] {};
@@ -260,7 +260,11 @@ public:
     // like ReadOutput, but if speedRatio is meaningfully different from 1.0, pulls
     // up to ceil(outFrames*speedRatio) frames and time-stretches them down to
     // outFrames so sound effects keep their pitch during fast-forward/slow-mo.
+    // The ratio is lowered to what the ring holds when the emulator falls short of it.
     int ReadOutputStretched(s16* data, int outFrames, double speedRatio);
+    // frames produced per frame read by ReadOutput/ReadOutputStretched over the last ~0.25 s of output:
+    // the speed the emulator achieves relative to the output
+    double GetProducedRatio() const;
 
     void SetOutputSampleRate(double rate);
     void SetOutputSkew(double skew);
@@ -278,9 +282,14 @@ public:
     void RetagHostNotes();
     // RealtimeBGM: forgets every note's owner (feature disabled, reset)
     void ClearHostTags();
+    // RealtimeBGM: silences the notes tagged with this player for good (the release tails of a song
+    // replaced on that player); the next key-on on their channels tags them anew
+    void RetireHostTags(int player);
 
 private:
     void GrowOutputBuffer(u32 minFrames);
+    int ReadRing(s16* data, int samples);
+    void CountRead(int frames);
 
     u32 OutputBufferSize = 0;
     double OutputSampleRate;
@@ -289,6 +298,12 @@ private:
 
     Sound::TimeStretch Stretcher;
     std::vector<s16> StretchScratch;
+    bool Stretching = false;        // the last ReadOutputStretched call stretched
+
+    // under AudioLock: frames buffered and read in the current window, and the last window's ratio
+    u32 FramesProduced = 0;
+    u32 FramesRead = 0;
+    double ProducedRatio = 1.0;
 
     blip_t* BlipLeft;
     blip_t* BlipRight;

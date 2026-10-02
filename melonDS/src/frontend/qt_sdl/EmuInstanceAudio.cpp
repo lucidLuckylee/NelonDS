@@ -169,8 +169,9 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
 
     // while fast-forwarding, time-stretch the SPU output (sound effects/cries; BGM is
     // handled separately below) so it plays faster at its original pitch instead of
-    // being chopped by the ring buffer overwriting itself
-    bool stretch = (inst->curFPS > inst->targetFPS) && inst->globalCfg.GetBool("Audio.FastForwardStretch");
+    // being chopped by the ring buffer overwriting itself; it belongs to the real-time BGM feature
+    bool stretch = (inst->curFPS > inst->targetFPS) && inst->globalCfg.GetBool("Audio.FastForwardStretch")
+        && inst->globalCfg.GetBool("Audio.RealtimeBGM");
 
     int len_in, num_in;
     SDL_LockMutex(inst->audioSyncLock);
@@ -189,9 +190,9 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
     SDL_UnlockMutex(inst->audioSyncLock);
 
     // RealtimeBGM: the host BGM renderer is paced by the audio device, so it renders exactly `len` frames
-    // per callback; it keeps running while muted so it stays in time with the game
+    // per callback, also when the SPU has nothing; it keeps running while muted so it stays in time with the game
     Sound::BgmRenderer& bgm = inst->nds->SndTracker.Renderer();
-    bool bgmActive = (num_in >= 1) && bgm.Active();
+    bool bgmActive = bgm.Active();
     thread_local std::vector<s16> bgmbuf;
     if (bgmActive)
     {
@@ -200,11 +201,14 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
         bgm.Render(bgmbuf.data(), len);
     }
 
-    if ((num_in < 1) || inst->audioMutedByWindowFocus || inst->audioMutedToggle || inst->audioMutedByFastForward)
+    if (((num_in < 1) && !bgmActive) || inst->audioMutedByWindowFocus || inst->audioMutedToggle || inst->audioMutedByFastForward)
     {
         memset(stream, 0, len*sizeof(s16)*2);
         return;
     }
+
+    if (num_in < 1)
+        memset(stream, 0, len*sizeof(s16)*2);
 
     if (inst->audioVolume < 256)
     {
@@ -213,7 +217,7 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
             samples[i] = ((s32) samples[i] * inst->audioVolume) >> 8;
     }
 
-    if (num_in < len_in)
+    if (num_in >= 1 && num_in < len_in)
     {
         int last = num_in-1;
 

@@ -139,7 +139,8 @@ int Track::NoteOn(int key, int vel, int len)
 		fRecord = noteDef->record;
 	}
 
-	if (!fRecord)
+	// NitroSDK NoteOnCommandProc plays DIRECTPCM (4) from a RAM address and nothing for NULL (5): no note here
+	if (!fRecord || fRecord >= 4)
 		return -1;
 	else if (fRecord == 1)
 	{
