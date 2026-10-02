@@ -179,8 +179,8 @@ struct BgmRenderer::Impl
     s16 TrackPitch[16];
     s8 TrackPan[16];
     u16 TrackMute;
-    s16 Variables[16];
-    u16 VariablesSet;
+    s16 Variables[32];
+    u32 VariablesSet;
     u8 MasterVolume = 127; // hardware setting, survives Load()
     u16 ChannelMask = 0xFFFF;
 
@@ -222,8 +222,8 @@ struct BgmRenderer::Impl
         memcpy(ply.trackExtPitch, TrackPitch, sizeof(TrackPitch));
         memcpy(ply.trackExtPan, TrackPan, sizeof(TrackPan));
         ply.trackMute = TrackMute;
-        for (int i = 0; i < 16; i++)
-            if (VariablesSet & (1 << i))
+        for (int i = 0; i < 32; i++)
+            if (VariablesSet & (1u << i))
                 ply.variables[i] = Variables[i];
     }
 };
@@ -395,6 +395,12 @@ bool BgmRenderer::Playing() const
     return P->Playing && !P->Cur.Ply->Finished();
 }
 
+u32 BgmRenderer::Tick() const
+{
+    std::lock_guard<std::mutex> lock(P->Lock);
+    return P->Cur.Ply->tickCounter;
+}
+
 // extFader is in the driver's centibel (0.1 dB) volume units and is added straight onto the
 // channel attenuation, see Channel::UpdateVol and NitroSDK:
 //   snd_seq.c:779-780       UpdateTrackChannel(): user_decay = DecibelSquare(track volume)
@@ -455,23 +461,24 @@ void BgmRenderer::SetTrackPan(u16 trackMask, s8 pan)
     P->Cur.Ply->FlagTracks(trackMask, SP::TUF_PAN);
 }
 
-// Like SND_SEQ_MUTE_NO_STOP (what NNS_SndPlayerSetTrackMute(TRUE) sends): no new notes, held notes continue.
-void BgmRenderer::MuteTracks(u16 trackMask, bool mute)
+void BgmRenderer::SetTrackMute(u16 trackMask, int mode)
 {
-    if (mute)
+    if (mode)
         P->TrackMute |= trackMask;
     else
         P->TrackMute &= ~trackMask;
     std::lock_guard<std::mutex> lock(P->Lock);
-    P->Cur.Ply->trackMute = P->TrackMute;
+    for (int i = 0; i < 16; i++)
+        if (trackMask & (1 << i))
+            P->Cur.Ply->SetTrackMute(i, mode);
 }
 
 void BgmRenderer::SetVariable(u8 index, s16 value)
 {
-    if (index >= 16)
+    if (index >= 32)
         return;
     P->Variables[index] = value;
-    P->VariablesSet |= 1 << index;
+    P->VariablesSet |= 1u << index;
     std::lock_guard<std::mutex> lock(P->Lock);
     P->Cur.Ply->variables[index] = value;
 }
