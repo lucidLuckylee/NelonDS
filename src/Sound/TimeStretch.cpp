@@ -25,6 +25,8 @@
 namespace melonDS::Sound
 {
 
+constexpr double Pi = 3.14159265358979323846; // M_PI needs _USE_MATH_DEFINES on MSVC
+
 static s16 Saturate(float v)
 {
     long s = std::lround(v);
@@ -52,7 +54,7 @@ void TimeStretch::SetRate(double hz)
 
     Window.resize(FrameSize);
     for (int i = 0; i < FrameSize; i++)
-        Window[i] = (float)(0.5 * (1.0 - std::cos((2.0 * M_PI * i) / FrameSize)));
+        Window[i] = (float)(0.5 * (1.0 - std::cos((2.0 * Pi * i) / FrameSize)));
 
     Reset();
 }

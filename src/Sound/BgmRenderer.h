@@ -60,6 +60,7 @@ public:
     void Pause(bool paused);     // pauses the current voice; the outgoing one plays out
     bool Active() const;         // has output: Playing() or the outgoing voice still sounding
     bool Playing() const;        // current song playing (not stopped, not finished)
+    u32 Tick() const;            // current song's position, in Start() ticks
 
     // Driver-level controls, mirrored from sniffed SND commands.
     // SNDPlayer.extFader (PLAYER_PARAM offset 6), 0 = full. frames: emulated frames since the previous
@@ -70,8 +71,9 @@ public:
     void SetTrackFader(u16 trackMask, s16 driverDecibel);  // TRACK_PARAM offset 0xA
     void SetTrackPitch(u16 trackMask, s16 pitch);          // TRACK_PARAM offset 0xC
     void SetTrackPan(u16 trackMask, s8 pan);               // TRACK_PARAM offset 9
-    void MuteTracks(u16 trackMask, bool mute);  // MUTE_TRACK
-    void SetVariable(u8 index, s16 value);      // PLAYER_LOCAL_VAR
+    // MUTE_TRACK, NitroSDK SNDSeqMute: 0 off, 1 no new notes, 2 also release held notes, 3 also stop them
+    void SetTrackMute(u16 trackMask, int mode);
+    void SetVariable(u8 index, s16 value);      // 0-15 PLAYER_LOCAL_VAR, 16-31 PLAYER_GLOBAL_VAR
     void SetMasterVolume(u8 vol127);            // MASTER_VOLUME
     // Channels the song's notes may use (the player's ALLOCATABLE_CHANNEL mask), 0xFFFF = all.
     // Applies to new notes; kept across Load().

@@ -88,6 +88,7 @@ private:
         bool Paused = false;
         u32 MML = 0, MMLLen = 0, Bank = 0;
         u32 CRC = 0;
+        u32 BankCRC = 0;          // of the bank at start, see BankCRC32; 0 if it was not a valid SBNK
         u16 ChanMask = 0;         // last ALLOCATABLE_CHANNEL
         s16 ExtFader = 0;
         u32 FaderFrame = 0;       // FrameCount at the last ExtFader change
@@ -100,6 +101,7 @@ private:
     void HandleCommand(u32 id, u32 a0, u32 a1, u32 a2, u32 a3);
     void OnStart(int player, u32 mml, u32 offset, u32 bank, bool prepareOnly);
     void OnStop(int player);
+    void EnsureIndex();           // builds the SDAT index the first time the enabled feature needs it
     bool EnterHostMode(int player, bool fromStart);  // fromStart: play from tick 0, else resync to the driver
     void LeaveHostMode();
     void PickHost();              // fast-forwarding without a host: adopt the most recent eligible player
@@ -110,10 +112,14 @@ private:
     u32 TickCounter(int player) const;  // from SNDSharedWork, 0 if unknown
     u32 RamRead32(u32 addr) const;
     bool CopyRAM(u32 addr, u32 len, std::vector<u8>& out) const;
+    bool CopyBank(u32 addr, std::vector<u8>& out) const;
     bool CopySwar(u32 addr, std::vector<u8>& out) const;
 
     melonDS::NDS& NDS;
     SdatIndex Idx;
+    bool IdxBuilt = false;
+    const u8* Rom = nullptr;      // cart ROM the index is built from
+    u32 RomLen = 0;
     BgmRenderer Bgm;
     std::array<PlayerState, 16> P;
     bool FF = false;
@@ -125,19 +131,19 @@ private:
     bool DriverInfoPending = false;
     std::array<s8, 16> ChanOwner {};   // per SPU channel: driver player, -1 unknown (from driver info)
     bool ChanOwnerValid = false;
-    u32 LiveWork = 0;
+    u32 LiveWork = 0;             // ARM7 address of the driver's SNDWork, validated by ParseDriverInfo
     // blobs of sequences the host has played, so a re-adoption still works when the game has
     // moved or freed the bank/wave data in RAM in the meantime
     struct SongBlobs
     {
-        u32 CRC = 0;
+        u32 CRC = 0, BankCRC = 0;  // one sequence is played with different banks
         std::vector<u8> MML, Bank, Swar[4];
     };
     std::array<SongBlobs, 6> BlobCache;
-    u32 BlobCacheNext = 0;             // ARM7 address of the driver's SNDWork, validated by ParseDriverInfo
+    u32 BlobCacheNext = 0;
     u32 DriverInfoReq = 0;        // buffer of the newest READ_DRIVER_INFO (DriverInfoAddr is the previous, completed one)
     int DriverInfoLogged = -1;    // last logged parse result
-    std::array<u16, 16> TrackMute {};   // per player: tracks muted by MUTE_TRACK
+    u8 TrackMuteMode[16][16] {};  // per player and track: last MUTE_TRACK mode (SNDSeqMute)
     // per player and track: TRACK_PARAM values, applied when the player becomes the host
     s16 TrackFader[16][16] {};
     s16 TrackPitch[16][16] {};
