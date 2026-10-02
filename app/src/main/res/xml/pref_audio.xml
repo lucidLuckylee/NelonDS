@@ -39,6 +39,14 @@
             app:min="0"
             android:max="256" />
 
+    <SwitchPreference
+            android:key="nelonds_bgm_normal_speed"
+            android:title="@string/nelonds_bgm_normal_speed"
+            android:summary="@string/nelonds_bgm_normal_speed_summary"
+            android:dependency="sound_enabled"
+            app:iconSpaceReserved="false"
+            android:defaultValue="true" />
+
     <ListPreference
             android:key="audio_latency"
             android:title="@string/audio_latency"

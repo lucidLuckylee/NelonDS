@@ -58,6 +58,22 @@ android {
         getByName("debug") {
             applicationIdSuffix = ".dev"
         }
+        // NelonDS: optimized native build (same as release) under its own package id, debug-signed
+        create("nelon") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".dev"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            // Tuned for the AYN Thor (Snapdragon 8 Gen 2: Cortex-X3/A715/A510, ARMv8.6 features, no SVE exposed)
+            externalNativeBuild {
+                cmake {
+                    val tuned = "-O3 -march=armv8.6-a+crypto -mtune=cortex-x3 -fomit-frame-pointer"
+                    cFlags(tuned)
+                    cppFlags(tuned)
+                    arguments("-DCMAKE_BUILD_TYPE=Release", "-DENABLE_LTO=ON")
+                }
+            }
+        }
     }
 
     flavorDimensions += listOf("version", "build")

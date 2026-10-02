@@ -44,6 +44,7 @@ interface SettingsRepository {
     fun getDSiCameraStaticImage(): Uri?
 
     fun isSoundEnabled(): Boolean
+    fun isNelonBgmEnabled(): Boolean
     fun getAudioLatency(): AudioLatency
     fun getMicSource(): MicSource
 
